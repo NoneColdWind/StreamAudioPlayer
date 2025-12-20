@@ -6,7 +6,7 @@ import java.io.IOException;
 import java.util.concurrent.TimeUnit;
 
 /**
- * 支持暂停/继续功能的流式音频播放器
+ * 支持暂停/继续功能和位置调节的流式音频播放器
  */
 public class StreamAudioPlayer {
 
@@ -16,12 +16,9 @@ public class StreamAudioPlayer {
     public static final int STATE_STOPPED = 2;
 
     // 成员变量
-    private String currentFilePath;
     private SourceDataLine sourceDataLine;
     private Thread playbackThread;
     private AudioInputStream audioStream;
-    private long audioLength;
-    private long currentPosition;
     private volatile boolean playing;
     private volatile boolean paused;
     private volatile int playbackState;
@@ -33,6 +30,14 @@ public class StreamAudioPlayer {
     private float minVolume;
     private float maxVolume;
     private boolean volumeSupported = false;
+
+    // 位置控制相关
+    private File audioFile;
+    private AudioFormat originalFormat;
+    private long totalFrames; // 总帧数
+    private long currentFrame; // 当前帧位置
+    private int frameSize; // 每帧的字节数
+    private boolean positionSupported = true;
 
     public StreamAudioPlayer() {
 
@@ -49,34 +54,40 @@ public class StreamAudioPlayer {
     public void play(String filePath)
             throws UnsupportedAudioFileException, IOException, LineUnavailableException, InterruptedException {
 
-        if (!(playbackThread == null)) {
-            if (playbackThread.isAlive()) {
-                playbackThread.join();
-            }
-        }
+        // 停止当前播放
+        stop();
 
         // 准备音频流
-        currentFilePath = filePath;
-        File audioFile = new File(currentFilePath);
+        audioFile = new File(filePath);
         audioStream = AudioSystem.getAudioInputStream(audioFile);
-        AudioFormat format = audioStream.getFormat();
+        originalFormat = audioStream.getFormat();
 
+        // 计算总帧数和帧大小
+        totalFrames = audioStream.getFrameLength();
+        frameSize = originalFormat.getFrameSize();
 
+        // 重置当前位置
+        currentFrame = 0;
 
         // 如果不支持此格式，则转换为标准PCM格式
-        if (!isFormatSupported(format)) {
-            format = new AudioFormat(
+        if (!isFormatSupported(originalFormat)) {
+            AudioFormat targetFormat = new AudioFormat(
                     AudioFormat.Encoding.PCM_SIGNED,
-                    format.getSampleRate(),
+                    originalFormat.getSampleRate(),
                     16,
-                    format.getChannels(),
-                    format.getChannels() * 2,
-                    format.getSampleRate(),
+                    originalFormat.getChannels(),
+                    originalFormat.getChannels() * 2,
+                    originalFormat.getSampleRate(),
                     false);
-            audioStream = AudioSystem.getAudioInputStream(format, audioStream);
+            audioStream = AudioSystem.getAudioInputStream(targetFormat, audioStream);
+            // 更新帧信息
+            frameSize = targetFormat.getFrameSize();
+            // 重新计算总帧数（转换后可能不同）
+            totalFrames = audioStream.getFrameLength();
         }
 
         // 打开数据行
+        AudioFormat format = audioStream.getFormat();
         DataLine.Info info = new DataLine.Info(SourceDataLine.class, format);
         sourceDataLine = (SourceDataLine) AudioSystem.getLine(info);
         sourceDataLine.open(format);
@@ -147,7 +158,207 @@ public class StreamAudioPlayer {
             // 关闭资源
             closeResources();
             playbackState = STATE_STOPPED;
+            currentFrame = 0;
         }
+    }
+
+    /**
+     * 跳转到指定位置（基于时间）
+     *
+     * @param seconds 跳转到的位置（秒）
+     * @return 是否跳转成功
+     */
+    public boolean seekToTime(double seconds) {
+        if (!positionSupported || audioStream == null) {
+            return false;
+        }
+
+        float frameRate = originalFormat.getFrameRate();
+        long targetFrame = (long) (seconds * frameRate);
+        return seekToFrame(targetFrame);
+    }
+
+    /**
+     * 跳转到指定帧位置
+     *
+     * @param frame 目标帧位置
+     * @return 是否跳转成功
+     */
+    public boolean seekToFrame(long frame) {
+        if (!positionSupported || audioFile == null || frame < 0 || frame >= totalFrames) {
+            return false;
+        }
+
+        // 保存当前状态
+        boolean wasPlaying = (playbackState == STATE_PLAYING);
+
+        // 暂停播放
+        if (wasPlaying) {
+            pause();
+        }
+
+        try {
+            // 关闭当前流
+            if (audioStream != null) {
+                audioStream.close();
+            }
+
+            // 重新打开音频流并跳转到指定位置
+            audioStream = AudioSystem.getAudioInputStream(audioFile);
+
+            // 如果需要格式转换
+            if (!isFormatSupported(originalFormat)) {
+                AudioFormat targetFormat = new AudioFormat(
+                        AudioFormat.Encoding.PCM_SIGNED,
+                        originalFormat.getSampleRate(),
+                        16,
+                        originalFormat.getChannels(),
+                        originalFormat.getChannels() * 2,
+                        originalFormat.getSampleRate(),
+                        false);
+                audioStream = AudioSystem.getAudioInputStream(targetFormat, audioStream);
+            }
+
+            // 跳过指定数量的帧
+            long bytesToSkip = frame * frameSize;
+            long skipped = audioStream.skip(bytesToSkip);
+
+            if (skipped != bytesToSkip) {
+                System.out.println("跳转不精确: 期望 " + bytesToSkip + " 字节, 实际跳过 " + skipped + " 字节");
+            }
+
+            currentFrame = frame;
+
+            // 如果之前正在播放，则恢复播放
+            if (wasPlaying) {
+                resume();
+            }
+
+            return true;
+        } catch (Exception e) {
+            System.out.println("跳转失败: " + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 向前跳转指定时间
+     *
+     * @param seconds 跳转的时间（秒）
+     * @return 是否跳转成功
+     */
+    public boolean seekForward(double seconds) {
+        if (!positionSupported) {
+            return false;
+        }
+
+        float frameRate = originalFormat.getFrameRate();
+        long framesToSkip = (long) (seconds * frameRate);
+        long targetFrame = Math.min(currentFrame + framesToSkip, totalFrames - 1);
+
+        return seekToFrame(targetFrame);
+    }
+
+    /**
+     * 向后跳转指定时间
+     *
+     * @param seconds 跳转的时间（秒）
+     * @return 是否跳转成功
+     */
+    public boolean seekBackward(double seconds) {
+        if (!positionSupported) {
+            return false;
+        }
+
+        float frameRate = originalFormat.getFrameRate();
+        long framesToSkip = (long) (seconds * frameRate);
+        long targetFrame = Math.max(0, currentFrame - framesToSkip);
+
+        return seekToFrame(targetFrame);
+    }
+
+    /**
+     * 获取当前播放位置（秒）
+     *
+     * @return 当前播放时间（秒）
+     */
+    public double getCurrentTime() {
+        if (!positionSupported || originalFormat == null) {
+            return 0;
+        }
+
+        return currentFrame / originalFormat.getFrameRate();
+    }
+
+    /**
+     * 获取音频总时长（秒）
+     *
+     * @return 总时长（秒）
+     */
+    public double getTotalTime() {
+        if (!positionSupported || originalFormat == null) {
+            return 0;
+        }
+
+        return totalFrames / originalFormat.getFrameRate();
+    }
+
+    /**
+     * 获取当前播放位置（百分比）
+     *
+     * @return 播放进度百分比（0.0 - 1.0）
+     */
+    public double getPlaybackProgress() {
+        if (!positionSupported || totalFrames == 0) {
+            return 0;
+        }
+
+        return (double) currentFrame / totalFrames;
+    }
+
+    /**
+     * 获取当前帧位置
+     *
+     * @return 当前帧数
+     */
+    public long getCurrentFrame() {
+        return currentFrame;
+    }
+
+    /**
+     * 获取总帧数
+     *
+     * @return 总帧数
+     */
+    public long getTotalFrames() {
+        return totalFrames;
+    }
+
+    /**
+     * 检查是否支持位置控制
+     *
+     * @return 如果支持位置控制返回true
+     */
+    public boolean isPositionSupported() {
+        return positionSupported;
+    }
+
+    /**
+     * 获取当前位置信息
+     *
+     * @return 格式化的位置信息字符串
+     */
+    public String getPositionInfo() {
+        if (!positionSupported) {
+            return "位置控制不支持";
+        }
+
+        double currentTime = getCurrentTime();
+        double totalTime = getTotalTime();
+        double progress = getPlaybackProgress() * 100;
+
+        return String.format("当前位置: %d/%d 帧 (%.1f/%.1f 秒, %.1f%%)",
+                currentFrame, totalFrames, currentTime, totalTime, progress);
     }
 
     /**
@@ -186,65 +397,6 @@ public class StreamAudioPlayer {
                 System.out.println("警告：当前音频设备不支持音量控制");
             }
         }
-    }
-
-    /**
-     * 跳转到指定位置
-     * @param positionMs 位置（毫秒）
-     * @return 是否成功
-     */
-    public boolean seek(long positionMs) {
-        if (audioStream == null || sourceDataLine == null) {
-            return false;
-        }
-
-        try {
-            // 停止当前播放
-            if (sourceDataLine.isRunning()) {
-                sourceDataLine.stop();
-            }
-
-            // 计算要跳转的字节位置
-            AudioFormat format = audioStream.getFormat();
-            long bytesPerMs = (long) (format.getFrameRate() * format.getFrameSize() / 1000);
-            long targetBytePosition = positionMs * bytesPerMs;
-
-            // 重置流到开始位置
-            audioStream = AudioSystem.getAudioInputStream(new File(currentFilePath));
-
-            // 跳过指定字节数
-            long skipped = audioStream.skip(targetBytePosition);
-            if (skipped != targetBytePosition) {
-                return false;
-            }
-
-            currentPosition = positionMs;
-
-            // 重新开始播放
-            if (playing && !paused) {
-                sourceDataLine.start();
-            }
-
-            return true;
-
-        } catch (Exception e) {
-            e.printStackTrace();
-            return false;
-        }
-    }
-
-    /**
-     * 获取当前播放位置
-     */
-    public long getCurrentPosition() {
-        return currentPosition;
-    }
-
-    /**
-     * 获取音频总时长
-     */
-    public long getDuration() {
-        return audioLength;
     }
 
     /**
@@ -350,18 +502,16 @@ public class StreamAudioPlayer {
     }
 
     // 流式播放核心逻辑
-    // 修改streamPlayback方法以更新当前位置
     private void streamPlayback() {
         try {
-            AudioFormat format = audioStream.getFormat();
-            long bytesPerMs = (long) (format.getFrameRate() * format.getFrameSize() / 1000);
-
             sourceDataLine.start();
-            int bufferSize = 4096;
+            int bufferSize = 4096; // 4KB缓冲区
             byte[] buffer = new byte[bufferSize];
             int bytesRead;
 
+            // 播放循环
             while (playing) {
+                // 当暂停时，等待
                 synchronized (playLock) {
                     while (paused) {
                         try {
@@ -373,15 +523,23 @@ public class StreamAudioPlayer {
                     }
                 }
 
+                // 读取数据
                 bytesRead = audioStream.read(buffer, 0, buffer.length);
-                if (bytesRead == -1) break;
 
+                if (bytesRead == -1) {
+                    break; // 文件结束
+                }
+
+                // 写入数据行
                 if (bytesRead > 0) {
                     sourceDataLine.write(buffer, 0, bytesRead);
-                    currentPosition += bytesRead / bytesPerMs;
+                    // 更新当前位置（基于读取的字节数计算帧数）
+                    int framesRead = bytesRead / frameSize;
+                    currentFrame += framesRead;
                 }
             }
 
+            // 播放完成，释放资源
             sourceDataLine.drain();
         } catch (IOException e) {
             e.printStackTrace();
@@ -419,37 +577,43 @@ public class StreamAudioPlayer {
     public static void main(String[] args) throws UnsupportedAudioFileException, LineUnavailableException, IOException, InterruptedException {
         StreamAudioPlayer player = new StreamAudioPlayer();
         player.play("music1.wav");
-        double volume0 = player.getVolume();
-        System.out.println(volume0);
 
-        TimeUnit.MILLISECONDS.sleep(5000);
+        // 显示音频信息
+        System.out.println("音频信息: " + player.getPositionInfo());
 
-        // 设置音量为50%
-        player.setVolume(0.5);
-        double volume1 = player.getVolume();
-        System.out.println(volume1);
+        TimeUnit.MILLISECONDS.sleep(2000);
 
-        TimeUnit.MILLISECONDS.sleep(5000);
+        // 跳转到30秒位置
+        System.out.println("跳转到30秒位置");
+        player.seekToTime(30.0);
+        System.out.println("跳转后: " + player.getPositionInfo());
 
-        // 增加20%音量
-        player.increaseVolume(0.2);
-        double volume2 = player.getVolume();
-        System.out.println(volume2);
+        TimeUnit.MILLISECONDS.sleep(3000);
 
-        TimeUnit.MILLISECONDS.sleep(5000);
+        // 向前跳转10秒
+        System.out.println("向前跳转10秒");
+        player.seekForward(10.0);
+        System.out.println("跳转后: " + player.getPositionInfo());
 
+        TimeUnit.MILLISECONDS.sleep(3000);
+
+        // 向后跳转5秒
+        System.out.println("向后跳转5秒");
+        player.seekBackward(5.0);
+        System.out.println("跳转后: " + player.getPositionInfo());
+
+        // 播放过程中显示进度
         for (int i = 0; i < 10; i++) {
-            player.decreaseVolume(0.05);
             TimeUnit.MILLISECONDS.sleep(1000);
-            System.out.println(player.getVolume());
+            System.out.printf("播放进度: %.1f%%\n", player.getPlaybackProgress() * 100);
         }
 
-        // 检查是否支持音量控制
-        if (player.isVolumeSupported()) {
-            System.out.println(player.getVolumeInfo());
+        // 检查是否支持位置控制
+        if (player.isPositionSupported()) {
+            System.out.println("位置控制功能已启用");
         }
 
-        TimeUnit.MILLISECONDS.sleep(114514);
+        TimeUnit.MILLISECONDS.sleep(5000);
+        player.stop();
     }
-
 }
