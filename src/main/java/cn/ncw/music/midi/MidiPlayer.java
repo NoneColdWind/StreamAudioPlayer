@@ -127,4 +127,9 @@ public class MidiPlayer {
         // 计算MIDI编号 (C4 = 60)
         return 12 * (octave + 1) + noteValue;
     }
+
+    public static void main(String[] args) {
+        playNote(60, 100, 500, 0, 0);
+    }
+
 }

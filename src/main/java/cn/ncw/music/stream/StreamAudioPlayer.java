@@ -16,9 +16,12 @@ public class StreamAudioPlayer {
     public static final int STATE_STOPPED = 2;
 
     // 成员变量
+    private String currentFilePath;
     private SourceDataLine sourceDataLine;
     private Thread playbackThread;
     private AudioInputStream audioStream;
+    private long audioLength;
+    private long currentPosition;
     private volatile boolean playing;
     private volatile boolean paused;
     private volatile int playbackState;
@@ -53,7 +56,8 @@ public class StreamAudioPlayer {
         }
 
         // 准备音频流
-        File audioFile = new File(filePath);
+        currentFilePath = filePath;
+        File audioFile = new File(currentFilePath);
         audioStream = AudioSystem.getAudioInputStream(audioFile);
         AudioFormat format = audioStream.getFormat();
 
@@ -185,6 +189,65 @@ public class StreamAudioPlayer {
     }
 
     /**
+     * 跳转到指定位置
+     * @param positionMs 位置（毫秒）
+     * @return 是否成功
+     */
+    public boolean seek(long positionMs) {
+        if (audioStream == null || sourceDataLine == null) {
+            return false;
+        }
+
+        try {
+            // 停止当前播放
+            if (sourceDataLine.isRunning()) {
+                sourceDataLine.stop();
+            }
+
+            // 计算要跳转的字节位置
+            AudioFormat format = audioStream.getFormat();
+            long bytesPerMs = (long) (format.getFrameRate() * format.getFrameSize() / 1000);
+            long targetBytePosition = positionMs * bytesPerMs;
+
+            // 重置流到开始位置
+            audioStream = AudioSystem.getAudioInputStream(new File(currentFilePath));
+
+            // 跳过指定字节数
+            long skipped = audioStream.skip(targetBytePosition);
+            if (skipped != targetBytePosition) {
+                return false;
+            }
+
+            currentPosition = positionMs;
+
+            // 重新开始播放
+            if (playing && !paused) {
+                sourceDataLine.start();
+            }
+
+            return true;
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            return false;
+        }
+    }
+
+    /**
+     * 获取当前播放位置
+     */
+    public long getCurrentPosition() {
+        return currentPosition;
+    }
+
+    /**
+     * 获取音频总时长
+     */
+    public long getDuration() {
+        return audioLength;
+    }
+
+    /**
      * 设置音量
      *
      * @param volume 音量值，范围0.0-1.0（0% - 100%）
@@ -287,16 +350,18 @@ public class StreamAudioPlayer {
     }
 
     // 流式播放核心逻辑
+    // 修改streamPlayback方法以更新当前位置
     private void streamPlayback() {
         try {
+            AudioFormat format = audioStream.getFormat();
+            long bytesPerMs = (long) (format.getFrameRate() * format.getFrameSize() / 1000);
+
             sourceDataLine.start();
-            int bufferSize = 4096; // 4KB缓冲区
+            int bufferSize = 4096;
             byte[] buffer = new byte[bufferSize];
             int bytesRead;
 
-            // 播放循环
             while (playing) {
-                // 当暂停时，等待
                 synchronized (playLock) {
                     while (paused) {
                         try {
@@ -308,20 +373,15 @@ public class StreamAudioPlayer {
                     }
                 }
 
-                // 读取数据
                 bytesRead = audioStream.read(buffer, 0, buffer.length);
+                if (bytesRead == -1) break;
 
-                if (bytesRead == -1) {
-                    break; // 文件结束
-                }
-
-                // 写入数据行
                 if (bytesRead > 0) {
                     sourceDataLine.write(buffer, 0, bytesRead);
+                    currentPosition += bytesRead / bytesPerMs;
                 }
             }
 
-            // 播放完成，释放资源
             sourceDataLine.drain();
         } catch (IOException e) {
             e.printStackTrace();
