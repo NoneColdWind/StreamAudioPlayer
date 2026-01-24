@@ -141,11 +141,6 @@ public class StreamAudioPlayer {
             playing = false;
             paused = false;
 
-            // 唤醒可能处于等待状态的播放线程
-            synchronized (playLock) {
-                playLock.notifyAll();
-            }
-
             // 等待播放线程结束
             try {
                 if (playbackThread != null && playbackThread.isAlive()) {
@@ -576,10 +571,11 @@ public class StreamAudioPlayer {
 
     public static void main(String[] args) throws UnsupportedAudioFileException, LineUnavailableException, IOException, InterruptedException {
         StreamAudioPlayer player = new StreamAudioPlayer();
-        player.play("music1.wav");
+        player.play("wait.wav");
 
         // 显示音频信息
         System.out.println("音频信息: " + player.getPositionInfo());
+        System.out.println(player.getTotalTime());
 
         TimeUnit.MILLISECONDS.sleep(2000);
 
