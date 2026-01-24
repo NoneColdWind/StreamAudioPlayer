@@ -3,7 +3,7 @@ plugins {
 }
 
 group = "cn.ncw.music"
-version = "1.0.2"
+version = "1.0.2-hotfix2"
 
 repositories {
     mavenCentral()
