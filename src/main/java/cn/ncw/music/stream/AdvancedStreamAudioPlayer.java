@@ -1,5 +1,8 @@
 package cn.ncw.music.stream;
 
+import lombok.Getter;
+import lombok.Setter;
+
 import javax.sound.sampled.*;
 import java.io.File;
 import java.io.IOException;
@@ -31,11 +34,25 @@ public class AdvancedStreamAudioPlayer {
     private AudioInputStream audioStream;
     private volatile boolean playing;
     private volatile boolean paused;
+    /**
+     * -- GETTER --
+     *  获取当前播放状态
+     *
+     * @return 播放状态（STATE_PLAYING/STATE_PAUSED/STATE_STOPPED）
+     */
+    @Getter
     private volatile int playbackState;
     private final Object playLock = new Object();
 
     // 音量控制相关
     private FloatControl volumeControl;
+    /**
+     * -- GETTER --
+     *  获取当前音量
+     *
+     * @return 当前音量值，范围0.0-1.0
+     */
+    @Getter
     private double currentVolume = 0.8;
     private float minVolume;
     private float maxVolume;
@@ -44,14 +61,37 @@ public class AdvancedStreamAudioPlayer {
     // 位置控制相关
     private File audioFile;
     private AudioFormat originalFormat;
+    /**
+     * -- GETTER --
+     *  获取总帧数
+     *
+     * @return 总帧数
+     */
+    @Getter
     private long totalFrames;
+    /**
+     * -- GETTER --
+     *  获取当前帧位置
+     *
+     * @return 当前帧数
+     */
+    @Getter
     private long currentFrame;
     private int frameSize;
+    /**
+     * -- GETTER --
+     *  检查是否支持位置控制
+     *
+     * @return 如果支持位置控制返回true
+     */
+    @Getter
     private boolean positionSupported = true;
 
     // 播放列表相关
     private List<File> playlist;
     private AtomicInteger currentTrackIndex;
+    // 播放模式设置
+    @Setter
     private boolean repeatMode = false;
     private boolean shuffleMode = false;
     private List<File> shuffledPlaylist;
@@ -215,6 +255,50 @@ public class AdvancedStreamAudioPlayer {
             }
         }
         return false;
+    }
+
+    /**
+     * 获取当前位置信息
+     *
+     * @return 格式化的位置信息字符串
+     */
+    public String getPositionInfo() {
+        if (!positionSupported) {
+            return "位置控制不支持";
+        }
+
+        double currentTime = getCurrentTime();
+        double totalTime = getTotalTime();
+        double progress = getPlaybackProgress() * 100;
+
+        return String.format("当前位置: %d/%d 帧 (%.1f/%.1f 秒, %.1f%%)",
+                currentFrame, totalFrames, currentTime, totalTime, progress);
+    }
+
+    /**
+     * 增加音量
+     *
+     * @param increment 增加的量，范围0.0-1.0
+     * @return 是否成功
+     */
+    public boolean increaseVolume(double increment) {
+        int var_1 = (int) (currentVolume * 100);
+        int var_2 = (int) (increment * 100);
+        int var = var_1 + var_2;
+        return setVolume(var / 100.0);
+    }
+
+    /**
+     * 减小音量
+     *
+     * @param decrement 减小的量，范围0.0-1.0
+     * @return 是否成功
+     */
+    public boolean decreaseVolume(double decrement) {
+        int var_1 = (int) (currentVolume * 100.0);
+        int var_2 = (int) (decrement * 100.0);
+        int var = var_1 - var_2;
+        return setVolume(var / 100.0);
     }
 
     /**
@@ -391,11 +475,6 @@ public class AdvancedStreamAudioPlayer {
         currentTrackIndex.set(prevIndex);
         play(prevFile);
         notifyTrackChanged(currentFile, prevFile);
-    }
-
-    // 播放模式设置
-    public void setRepeatMode(boolean repeat) {
-        this.repeatMode = repeat;
     }
 
     public void setShuffleMode(boolean shuffle) {
