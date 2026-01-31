@@ -1,6 +1,6 @@
 package cn.ncw.music.midi.enums;
 
-public enum MidiInstrument {;
+public class MidiInstrument {
 
     public static final int Acoustic_Grand_Piano = 0;
 

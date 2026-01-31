@@ -1,5 +1,8 @@
 package cn.ncw.music.stream;
 
+import lombok.Getter;
+import lombok.Setter;
+
 import javax.sound.sampled.*;
 import java.io.File;
 import java.io.IOException;
@@ -31,11 +34,23 @@ public class AdvancedStreamAudioPlayer {
     private AudioInputStream audioStream;
     private volatile boolean playing;
     private volatile boolean paused;
+    /**
+     * -- GETTER --
+     *  获取当前播放状态
+     *
+     */
+    @Getter
     private volatile int playbackState;
     private final Object playLock = new Object();
 
     // 音量控制相关
     private FloatControl volumeControl;
+    /**
+     * -- GETTER --
+     *  获取当前音量
+     *
+     */
+    @Getter
     private double currentVolume = 0.8;
     private float minVolume;
     private float maxVolume;
@@ -44,14 +59,34 @@ public class AdvancedStreamAudioPlayer {
     // 位置控制相关
     private File audioFile;
     private AudioFormat originalFormat;
+    /**
+     * -- GETTER --
+     *  获取总帧数
+     *
+     */
+    @Getter
     private long totalFrames;
+    /**
+     * -- GETTER --
+     *  获取当前帧位置
+     *
+     */
+    @Getter
     private long currentFrame;
     private int frameSize;
+    /**
+     * -- GETTER --
+     *  检查是否支持位置控制
+     *
+     */
+    @Getter
     private boolean positionSupported = true;
 
     // 播放列表相关
     private List<File> playlist;
     private AtomicInteger currentTrackIndex;
+    // 播放模式设置
+    @Setter
     private boolean repeatMode = false;
     private boolean shuffleMode = false;
     private List<File> shuffledPlaylist;
@@ -218,33 +253,6 @@ public class AdvancedStreamAudioPlayer {
     }
 
     /**
-     * 获取当前帧位置
-     *
-     * @return 当前帧数
-     */
-    public long getCurrentFrame() {
-        return currentFrame;
-    }
-
-    /**
-     * 获取总帧数
-     *
-     * @return 总帧数
-     */
-    public long getTotalFrames() {
-        return totalFrames;
-    }
-
-    /**
-     * 检查是否支持位置控制
-     *
-     * @return 如果支持位置控制返回true
-     */
-    public boolean isPositionSupported() {
-        return positionSupported;
-    }
-
-    /**
      * 获取当前位置信息
      *
      * @return 格式化的位置信息字符串
@@ -260,24 +268,6 @@ public class AdvancedStreamAudioPlayer {
 
         return String.format("当前位置: %d/%d 帧 (%.1f/%.1f 秒, %.1f%%)",
                 currentFrame, totalFrames, currentTime, totalTime, progress);
-    }
-
-    /**
-     * 获取当前播放状态
-     *
-     * @return 播放状态（STATE_PLAYING/STATE_PAUSED/STATE_STOPPED）
-     */
-    public int getPlaybackState() {
-        return playbackState;
-    }
-
-    /**
-     * 获取当前音量
-     *
-     * @return 当前音量值，范围0.0-1.0
-     */
-    public double getCurrentVolume() {
-        return currentVolume;
     }
 
     /**
@@ -480,11 +470,6 @@ public class AdvancedStreamAudioPlayer {
         currentTrackIndex.set(prevIndex);
         play(prevFile);
         notifyTrackChanged(currentFile, prevFile);
-    }
-
-    // 播放模式设置
-    public void setRepeatMode(boolean repeat) {
-        this.repeatMode = repeat;
     }
 
     public void setShuffleMode(boolean shuffle) {
@@ -706,23 +691,6 @@ public class AdvancedStreamAudioPlayer {
 
     public double getPlaybackProgress() {
         return totalFrames > 0 ? (double) currentFrame / totalFrames : 0;
-    }
-
-    // 新增：保存和加载播放列表
-    public void savePlaylist(String filePath) throws IOException {
-        // 简化的播放列表保存功能
-        Properties props = new Properties();
-        for (int i = 0; i < playlist.size(); i++) {
-            props.setProperty("track." + i, playlist.get(i).getAbsolutePath());
-        }
-        // 实际实现中可以使用XML或JSON格式
-    }
-
-    public void loadPlaylist(String filePath) throws IOException {
-        // 简化的播放列表加载功能
-        Properties props = new Properties();
-        // 实际实现中可以从文件加载
-        playlist.clear();
     }
 
     // 测试主方法

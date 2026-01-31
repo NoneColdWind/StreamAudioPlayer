@@ -1,5 +1,7 @@
 package cn.ncw.music.stream;
 
+import lombok.Getter;
+
 import javax.sound.sampled.*;
 import java.io.File;
 import java.io.IOException;
@@ -21,6 +23,12 @@ public class StreamAudioPlayer {
     private AudioInputStream audioStream;
     private volatile boolean playing;
     private volatile boolean paused;
+    /**
+     * -- GETTER --
+     *  获取当前播放状态
+     *
+     */
+    @Getter
     private volatile int playbackState;
     private final Object playLock = new Object();
 
@@ -29,14 +37,38 @@ public class StreamAudioPlayer {
     private double currentVolume = 0.8; // 默认音量 80%
     private float minVolume;
     private float maxVolume;
+    /**
+     * -- GETTER --
+     *  检查是否支持音量控制
+     *
+     */
+    @Getter
     private boolean volumeSupported = false;
 
     // 位置控制相关
     private File audioFile;
     private AudioFormat originalFormat;
+    /**
+     * -- GETTER --
+     *  获取总帧数
+     *
+     */
+    @Getter
     private long totalFrames; // 总帧数
+    /**
+     * -- GETTER --
+     *  获取当前帧位置
+     *
+     */
+    @Getter
     private long currentFrame; // 当前帧位置
     private int frameSize; // 每帧的字节数
+    /**
+     * -- GETTER --
+     *  检查是否支持位置控制
+     *
+     */
+    @Getter
     private boolean positionSupported = true;
 
     public StreamAudioPlayer() {
@@ -312,33 +344,6 @@ public class StreamAudioPlayer {
     }
 
     /**
-     * 获取当前帧位置
-     *
-     * @return 当前帧数
-     */
-    public long getCurrentFrame() {
-        return currentFrame;
-    }
-
-    /**
-     * 获取总帧数
-     *
-     * @return 总帧数
-     */
-    public long getTotalFrames() {
-        return totalFrames;
-    }
-
-    /**
-     * 检查是否支持位置控制
-     *
-     * @return 如果支持位置控制返回true
-     */
-    public boolean isPositionSupported() {
-        return positionSupported;
-    }
-
-    /**
      * 获取当前位置信息
      *
      * @return 格式化的位置信息字符串
@@ -354,15 +359,6 @@ public class StreamAudioPlayer {
 
         return String.format("当前位置: %d/%d 帧 (%.1f/%.1f 秒, %.1f%%)",
                 currentFrame, totalFrames, currentTime, totalTime, progress);
-    }
-
-    /**
-     * 获取当前播放状态
-     *
-     * @return 播放状态（STATE_PLAYING/STATE_PAUSED/STATE_STOPPED）
-     */
-    public int getPlaybackState() {
-        return playbackState;
     }
 
     /**
@@ -463,15 +459,6 @@ public class StreamAudioPlayer {
         int var_2 = (int) (decrement * 100.0);
         int var = var_1 - var_2;
         return setVolume(var / 100.0);
-    }
-
-    /**
-     * 检查是否支持音量控制
-     *
-     * @return 如果支持音量控制返回true
-     */
-    public boolean isVolumeSupported() {
-        return volumeSupported;
     }
 
     /**
