@@ -1123,6 +1123,8 @@ public class AdvancedStreamAudioPlayer {
             // 添加到播放列表
             player.addToPlaylist(testFiles);
 
+            /*
+
             // 测试不同的播放模式
             System.out.println("\n=== 测试顺序播放 ===");
             player.setPlayMode(AdvancedStreamAudioPlayer.PLAY_MODE_NORMAL);
@@ -1167,24 +1169,15 @@ public class AdvancedStreamAudioPlayer {
             TimeUnit.SECONDS.sleep(3);
             player.stop();
 
+             */
+
             // 测试顺序循环
             System.out.println("\n=== 测试顺序循环 ===");
             player.setPlayMode(AdvancedStreamAudioPlayer.PLAY_MODE_REPEAT_ALL);
             player.addToPlaylist(testFiles);
             player.play(testFiles.get(0).getAbsolutePath());
-            TimeUnit.SECONDS.sleep(2);
-            player.nextTrack();
-            TimeUnit.SECONDS.sleep(2);
-            player.stop();
+            TimeUnit.SECONDS.sleep(1145141919810L);
 
-            // 测试无序循环
-            System.out.println("\n=== 测试无序循环 ===");
-            player.setPlayMode(AdvancedStreamAudioPlayer.PLAY_MODE_SHUFFLE);
-            player.play(testFiles.get(2).getAbsolutePath());
-            TimeUnit.SECONDS.sleep(2);
-            player.nextTrack();
-            TimeUnit.SECONDS.sleep(2);
-            player.stop();
 
             // 显示统计信息
             System.out.println("\n=== 播放统计 ===");
