@@ -1,15 +1,13 @@
 package cn.ncw.music.stream;
 
 import lombok.Getter;
-import lombok.Setter;
 
 import javax.sound.sampled.*;
 import java.io.File;
 import java.io.IOException;
 import java.util.*;
-import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -23,6 +21,12 @@ public class AdvancedStreamAudioPlayer {
     public static final int STATE_STOPPED = 2;
     public static final int STATE_BUFFERING = 3;
 
+    // 播放模式常量
+    public static final int PLAY_MODE_NORMAL = 0;      // 顺序播放
+    public static final int PLAY_MODE_REPEAT_ONE = 1;  // 单曲循环
+    public static final int PLAY_MODE_REPEAT_ALL = 2;  // 顺序循环
+    public static final int PLAY_MODE_SHUFFLE = 3;     // 无序循环
+
     // 支持的文件格式
     private static final Set<String> SUPPORTED_FORMATS = Set.of(
             "wav", "mp3", "aiff", "au", "snd", "flac"
@@ -30,26 +34,19 @@ public class AdvancedStreamAudioPlayer {
 
     // 成员变量
     private SourceDataLine sourceDataLine;
-    private Thread playbackThread;
+    private volatile Thread playbackThread;
     private AudioInputStream audioStream;
     private volatile boolean playing;
     private volatile boolean paused;
-    /**
-     * -- GETTER --
-     *  获取当前播放状态
-     *
-     */
+
     @Getter
     private volatile int playbackState;
     private final Object playLock = new Object();
+    private final Object audioStreamLock = new Object();
 
     // 音量控制相关
     private FloatControl volumeControl;
-    /**
-     * -- GETTER --
-     *  获取当前音量
-     *
-     */
+
     @Getter
     private double currentVolume = 0.8;
     private float minVolume;
@@ -59,37 +56,29 @@ public class AdvancedStreamAudioPlayer {
     // 位置控制相关
     private File audioFile;
     private AudioFormat originalFormat;
-    /**
-     * -- GETTER --
-     *  获取总帧数
-     *
-     */
+
     @Getter
     private long totalFrames;
-    /**
-     * -- GETTER --
-     *  获取当前帧位置
-     *
-     */
+
     @Getter
-    private long currentFrame;
+    private volatile long currentFrame;
     private int frameSize;
-    /**
-     * -- GETTER --
-     *  检查是否支持位置控制
-     *
-     */
+
     @Getter
     private boolean positionSupported = true;
 
     // 播放列表相关
     private List<File> playlist;
     private AtomicInteger currentTrackIndex;
-    // 播放模式设置
-    @Setter
-    private boolean repeatMode = false;
-    private boolean shuffleMode = false;
-    private List<File> shuffledPlaylist;
+
+    @Getter
+    private volatile int playMode = PLAY_MODE_NORMAL;
+    private List<Integer> shuffleIndices;  // 用于记录随机播放顺序
+    private AtomicBoolean isShuffleGenerated = new AtomicBoolean(false);
+
+    // 线程池管理
+    private ExecutorService executorService;
+    private final AtomicBoolean executorShutdown = new AtomicBoolean(false);
 
     // 音效控制相关
     private Map<String, FloatControl> soundControls;
@@ -118,15 +107,33 @@ public class AdvancedStreamAudioPlayer {
         void onError(Exception e);
         void onPositionChanged(double position);
         void onVolumeChanged(double volume);
+        void onPlayModeChanged(int newMode);
+        void onPlaylistUpdated();
     }
 
     public AdvancedStreamAudioPlayer() {
         this.playlist = new ArrayList<>();
         this.currentTrackIndex = new AtomicInteger(0);
         this.playCount = new ConcurrentHashMap<>();
-        this.listeners = new ArrayList<>();
+        this.listeners = new CopyOnWriteArrayList<>();
         this.soundControls = new HashMap<>();
         this.audioBuffer = new byte[bufferSize];
+        this.shuffleIndices = new ArrayList<>();
+
+        // 初始化线程池
+        initExecutorService();
+    }
+
+    /**
+     * 初始化线程池
+     */
+    private void initExecutorService() {
+        executorService = Executors.newCachedThreadPool(r -> {
+            Thread thread = new Thread(r);
+            thread.setDaemon(true);
+            thread.setName("AudioPlayer-Worker-" + thread.getId());
+            return thread;
+        });
     }
 
     /**
@@ -153,28 +160,30 @@ public class AdvancedStreamAudioPlayer {
         notifyPlaybackStarted(file);
 
         // 准备音频流
-        audioStream = AudioSystem.getAudioInputStream(file);
-        originalFormat = audioStream.getFormat();
+        synchronized (audioStreamLock) {
+            audioStream = AudioSystem.getAudioInputStream(file);
+            originalFormat = audioStream.getFormat();
 
-        // 计算音频信息
-        totalFrames = audioStream.getFrameLength();
-        frameSize = originalFormat.getFrameSize();
-        currentFrame = 0;
-
-        // 格式转换（如果需要）
-        if (!isFormatSupported(originalFormat)) {
-            AudioFormat targetFormat = new AudioFormat(
-                    AudioFormat.Encoding.PCM_SIGNED,
-                    originalFormat.getSampleRate(),
-                    16,
-                    originalFormat.getChannels(),
-                    originalFormat.getChannels() * 2,
-                    originalFormat.getSampleRate(),
-                    false
-            );
-            audioStream = AudioSystem.getAudioInputStream(targetFormat, audioStream);
-            frameSize = targetFormat.getFrameSize();
+            // 计算音频信息
             totalFrames = audioStream.getFrameLength();
+            frameSize = originalFormat.getFrameSize();
+            currentFrame = 0;
+
+            // 格式转换（如果需要）
+            if (!isFormatSupported(originalFormat)) {
+                AudioFormat targetFormat = new AudioFormat(
+                        AudioFormat.Encoding.PCM_SIGNED,
+                        originalFormat.getSampleRate(),
+                        16,
+                        originalFormat.getChannels(),
+                        originalFormat.getChannels() * 2,
+                        originalFormat.getSampleRate(),
+                        false
+                );
+                audioStream = AudioSystem.getAudioInputStream(targetFormat, audioStream);
+                frameSize = targetFormat.getFrameSize();
+                totalFrames = audioStream.getFrameLength();
+            }
         }
 
         // 打开音频设备
@@ -193,9 +202,48 @@ public class AdvancedStreamAudioPlayer {
         startTime = System.currentTimeMillis();
 
         // 启动播放线程
+        startPlaybackThread();
+    }
+
+    /**
+     * 启动播放线程
+     */
+    private void startPlaybackThread() {
+        // 清理之前的线程
+        cleanupPlaybackThread();
+
         playbackThread = new Thread(this::streamPlayback);
+        playbackThread.setName("AudioPlayer-Playback-" + System.currentTimeMillis());
         playbackThread.setDaemon(true);
+        playbackThread.setPriority(Thread.MAX_PRIORITY);
         playbackThread.start();
+    }
+
+    /**
+     * 清理播放线程
+     */
+    private void cleanupPlaybackThread() {
+        if (playbackThread != null && playbackThread.isAlive()) {
+            try {
+                playing = false;
+                paused = false;
+
+                // 中断线程
+                playbackThread.interrupt();
+
+                // 等待线程结束
+                try {
+                    playbackThread.join(1000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+
+                // 确保线程被清理
+                playbackThread = null;
+            } catch (Exception e) {
+                notifyError(e);
+            }
+        }
     }
 
     /**
@@ -231,7 +279,16 @@ public class AdvancedStreamAudioPlayer {
     private void initSoundControls() {
         soundControls.clear();
 
-
+        // 尝试获取各种音效控制
+        if (sourceDataLine != null) {
+            Control[] controls = sourceDataLine.getControls();
+            for (Control control : controls) {
+                if (control instanceof FloatControl) {
+                    FloatControl floatControl = (FloatControl) control;
+                    soundControls.put(floatControl.getType().toString(), floatControl);
+                }
+            }
+        }
 
         equalizerSupported = !soundControls.isEmpty();
     }
@@ -250,6 +307,36 @@ public class AdvancedStreamAudioPlayer {
             }
         }
         return false;
+    }
+
+    /**
+     * 设置播放模式
+     */
+    public void setPlayMode(int mode) {
+        if (mode < 0 || mode > 3) {
+            throw new IllegalArgumentException("无效的播放模式");
+        }
+
+        this.playMode = mode;
+
+        // 如果是随机播放模式，重新生成随机列表
+        if (mode == PLAY_MODE_SHUFFLE) {
+            generateShuffleList();
+        }
+
+        notifyPlayModeChanged(mode);
+    }
+
+    /**
+     * 生成随机播放列表
+     */
+    private void generateShuffleList() {
+        shuffleIndices.clear();
+        for (int i = 0; i < playlist.size(); i++) {
+            shuffleIndices.add(i);
+        }
+        Collections.shuffle(shuffleIndices);
+        isShuffleGenerated.set(true);
     }
 
     /**
@@ -277,10 +364,8 @@ public class AdvancedStreamAudioPlayer {
      * @return 是否成功
      */
     public boolean increaseVolume(double increment) {
-        int var_1 = (int) (currentVolume * 100);
-        int var_2 = (int) (increment * 100);
-        int var = var_1 + var_2;
-        return setVolume(var / 100.0);
+        double newVolume = Math.min(1.0, currentVolume + increment);
+        return setVolume(newVolume);
     }
 
     /**
@@ -290,10 +375,8 @@ public class AdvancedStreamAudioPlayer {
      * @return 是否成功
      */
     public boolean decreaseVolume(double decrement) {
-        int var_1 = (int) (currentVolume * 100.0);
-        int var_2 = (int) (decrement * 100.0);
-        int var = var_1 - var_2;
-        return setVolume(var / 100.0);
+        double newVolume = Math.max(0.0, currentVolume - decrement);
+        return setVolume(newVolume);
     }
 
     /**
@@ -303,10 +386,10 @@ public class AdvancedStreamAudioPlayer {
         return new ArrayList<>(soundControls.keySet());
     }
 
-    // 播放控制方法（保持原有基础功能）
+    // 播放控制方法
     public void pause() {
-        if (sourceDataLine != null && sourceDataLine.isRunning()) {
-            synchronized (playLock) {
+        synchronized (playLock) {
+            if (sourceDataLine != null && sourceDataLine.isRunning()) {
                 sourceDataLine.stop();
                 paused = true;
                 playbackState = STATE_PAUSED;
@@ -316,46 +399,63 @@ public class AdvancedStreamAudioPlayer {
     }
 
     public void resume() {
-        if (sourceDataLine != null && !sourceDataLine.isRunning() && paused) {
-            synchronized (playLock) {
+        synchronized (playLock) {
+            if (sourceDataLine != null && !sourceDataLine.isRunning() && paused) {
                 sourceDataLine.start();
                 paused = false;
                 playbackState = STATE_PLAYING;
-                playLock.notifyAll();
+                playLock.notifyAll();  // 唤醒等待的线程
                 notifyPlaybackResumed();
             }
         }
     }
 
     public void stop() {
-        if (sourceDataLine != null) {
-            playing = false;
-            paused = false;
-            buffering = false;
+        playing = false;
+        paused = false;
+        buffering = false;
 
+        // 唤醒可能等待的线程
+        synchronized (playLock) {
+            playLock.notifyAll();
+        }
+
+        cleanupPlaybackThread();
+
+        closeResources();
+        playbackState = STATE_STOPPED;
+        currentFrame = 0;
+
+        // 更新总播放时间
+        if (startTime > 0) {
+            totalPlayTime += System.currentTimeMillis() - startTime;
+            startTime = 0;
+        }
+
+        notifyPlaybackStopped();
+    }
+
+    /**
+     * 安全停止播放器，清理所有资源
+     */
+    public void shutdown() {
+        stop();
+
+        // 关闭线程池
+        if (!executorShutdown.getAndSet(true)) {
+            executorService.shutdown();
             try {
-                if (playbackThread != null && playbackThread.isAlive()) {
-                    playbackThread.join(1000);
+                if (!executorService.awaitTermination(5, TimeUnit.SECONDS)) {
+                    executorService.shutdownNow();
                 }
             } catch (InterruptedException e) {
+                executorService.shutdownNow();
                 Thread.currentThread().interrupt();
             }
-
-            closeResources();
-            playbackState = STATE_STOPPED;
-            currentFrame = 0;
-
-            // 更新总播放时间
-            if (startTime > 0) {
-                totalPlayTime += System.currentTimeMillis() - startTime;
-                startTime = 0;
-            }
-
-            notifyPlaybackStopped();
         }
     }
 
-    // 位置控制方法（优化版本）
+    // 位置控制方法
     public boolean seekToTime(double seconds) {
         if (!positionSupported || audioStream == null) return false;
 
@@ -374,26 +474,30 @@ public class AdvancedStreamAudioPlayer {
         if (wasPlaying) pause();
 
         try {
-            if (audioStream != null) audioStream.close();
+            synchronized (audioStreamLock) {
+                if (audioStream != null) {
+                    audioStream.close();
+                }
 
-            audioStream = AudioSystem.getAudioInputStream(audioFile);
+                audioStream = AudioSystem.getAudioInputStream(audioFile);
 
-            if (!isFormatSupported(originalFormat)) {
-                AudioFormat targetFormat = new AudioFormat(
-                        AudioFormat.Encoding.PCM_SIGNED,
-                        originalFormat.getSampleRate(),
-                        16,
-                        originalFormat.getChannels(),
-                        originalFormat.getChannels() * 2,
-                        originalFormat.getSampleRate(),
-                        false
-                );
-                audioStream = AudioSystem.getAudioInputStream(targetFormat, audioStream);
+                if (!isFormatSupported(originalFormat)) {
+                    AudioFormat targetFormat = new AudioFormat(
+                            AudioFormat.Encoding.PCM_SIGNED,
+                            originalFormat.getSampleRate(),
+                            16,
+                            originalFormat.getChannels(),
+                            originalFormat.getChannels() * 2,
+                            originalFormat.getSampleRate(),
+                            false
+                    );
+                    audioStream = AudioSystem.getAudioInputStream(targetFormat, audioStream);
+                }
+
+                long bytesToSkip = frame * frameSize;
+                long skipped = audioStream.skip(bytesToSkip);
+                currentFrame = frame;
             }
-
-            long bytesToSkip = frame * frameSize;
-            long skipped = audioStream.skip(bytesToSkip);
-            currentFrame = frame;
 
             if (wasPlaying) resume();
 
@@ -409,79 +513,196 @@ public class AdvancedStreamAudioPlayer {
     public void addToPlaylist(File file) {
         if (isFormatSupported(file)) {
             playlist.add(file);
-            if (shuffleMode) {
-                updateShuffledPlaylist();
+
+            // 重新生成随机列表
+            if (playMode == PLAY_MODE_SHUFFLE) {
+                generateShuffleList();
             }
+
+            notifyPlaylistUpdated();
         }
     }
 
     public void addToPlaylist(List<File> files) {
         files.stream().filter(this::isFormatSupported).forEach(playlist::add);
-        if (shuffleMode) {
-            updateShuffledPlaylist();
+
+        // 重新生成随机列表
+        if (playMode == PLAY_MODE_SHUFFLE) {
+            generateShuffleList();
         }
+
+        notifyPlaylistUpdated();
     }
 
     public void removeFromPlaylist(int index) {
         if (index >= 0 && index < playlist.size()) {
             playlist.remove(index);
-            if (shuffleMode) {
-                updateShuffledPlaylist();
+
+            // 调整当前索引
+            if (currentTrackIndex.get() >= index && currentTrackIndex.get() > 0) {
+                currentTrackIndex.decrementAndGet();
             }
+
+            // 重新生成随机列表
+            if (playMode == PLAY_MODE_SHUFFLE) {
+                generateShuffleList();
+            }
+
+            notifyPlaylistUpdated();
         }
     }
 
     public void clearPlaylist() {
         playlist.clear();
-        shuffledPlaylist = null;
+        shuffleIndices.clear();
         currentTrackIndex.set(0);
+        isShuffleGenerated.set(false);
+        notifyPlaylistUpdated();
     }
 
+    /**
+     * 播放下一首（根据播放模式）
+     */
     public void nextTrack() throws Exception {
-        List<File> currentList = shuffleMode ? shuffledPlaylist : playlist;
-        if (currentList.isEmpty()) return;
-
-        int currentIndex = currentTrackIndex.get();
-        int nextIndex = (currentIndex + 1) % currentList.size();
-
-        if (nextIndex == 0 && !repeatMode) {
+        if (playlist.isEmpty()) {
             stop();
             return;
         }
 
-        File currentFile = currentList.get(currentIndex);
-        File nextFile = currentList.get(nextIndex);
+        switch (playMode) {
+            case PLAY_MODE_REPEAT_ONE:
+                // 单曲循环：重新播放当前曲目
+                File currentFile = getCurrentFile();
+                if (currentFile != null) {
+                    play(currentFile);
+                    notifyTrackChanged(currentFile, currentFile);
+                }
+                break;
 
-        currentTrackIndex.set(nextIndex);
-        play(nextFile);
-        notifyTrackChanged(currentFile, nextFile);
-    }
+            case PLAY_MODE_REPEAT_ALL:
+                // 顺序循环
+                int nextIndex = (currentTrackIndex.get() + 1) % playlist.size();
+                File current = getCurrentFile();
+                File next = playlist.get(nextIndex);
+                currentTrackIndex.set(nextIndex);
+                play(next);
+                if (current != null) {
+                    notifyTrackChanged(current, next);
+                }
+                break;
 
-    public void previousTrack() throws Exception {
-        List<File> currentList = shuffleMode ? shuffledPlaylist : playlist;
-        if (currentList.isEmpty()) return;
+            case PLAY_MODE_SHUFFLE:
+                // 无序循环
+                if (!isShuffleGenerated.get() || shuffleIndices.isEmpty()) {
+                    generateShuffleList();
+                }
 
-        int currentIndex = currentTrackIndex.get();
-        int prevIndex = (currentIndex - 1 + currentList.size()) % currentList.size();
+                int currentShuffleIndex = findCurrentShuffleIndex();
+                int nextShuffleIndex = (currentShuffleIndex + 1) % shuffleIndices.size();
+                int nextTrackIndex = shuffleIndices.get(nextShuffleIndex);
 
-        File currentFile = currentList.get(currentIndex);
-        File prevFile = currentList.get(prevIndex);
+                File shuffleCurrent = playlist.get(shuffleIndices.get(currentShuffleIndex));
+                File shuffleNext = playlist.get(nextTrackIndex);
+                currentTrackIndex.set(nextTrackIndex);
+                play(shuffleNext);
+                notifyTrackChanged(shuffleCurrent, shuffleNext);
+                break;
 
-        currentTrackIndex.set(prevIndex);
-        play(prevFile);
-        notifyTrackChanged(currentFile, prevFile);
-    }
-
-    public void setShuffleMode(boolean shuffle) {
-        this.shuffleMode = shuffle;
-        if (shuffle) {
-            updateShuffledPlaylist();
+            case PLAY_MODE_NORMAL:
+            default:
+                // 顺序播放
+                int normalNextIndex = currentTrackIndex.get() + 1;
+                if (normalNextIndex >= playlist.size()) {
+                    stop();
+                    notifyPlaybackFinished();
+                } else {
+                    File normalCurrent = getCurrentFile();
+                    File normalNext = playlist.get(normalNextIndex);
+                    currentTrackIndex.set(normalNextIndex);
+                    play(normalNext);
+                    if (normalCurrent != null) {
+                        notifyTrackChanged(normalCurrent, normalNext);
+                    }
+                }
+                break;
         }
     }
 
-    private void updateShuffledPlaylist() {
-        shuffledPlaylist = new ArrayList<>(playlist);
-        Collections.shuffle(shuffledPlaylist);
+    /**
+     * 播放上一首（根据播放模式）
+     */
+    public void previousTrack() throws Exception {
+        if (playlist.isEmpty()) return;
+
+        switch (playMode) {
+            case PLAY_MODE_REPEAT_ONE:
+                // 单曲循环：重新播放当前曲目
+                File currentFile = getCurrentFile();
+                if (currentFile != null) {
+                    play(currentFile);
+                    notifyTrackChanged(currentFile, currentFile);
+                }
+                break;
+
+            case PLAY_MODE_REPEAT_ALL:
+                // 顺序循环
+                int prevIndex = (currentTrackIndex.get() - 1 + playlist.size()) % playlist.size();
+                File current = getCurrentFile();
+                File prev = playlist.get(prevIndex);
+                currentTrackIndex.set(prevIndex);
+                play(prev);
+                if (current != null) {
+                    notifyTrackChanged(current, prev);
+                }
+                break;
+
+            case PLAY_MODE_SHUFFLE:
+                // 无序循环
+                if (!isShuffleGenerated.get() || shuffleIndices.isEmpty()) {
+                    generateShuffleList();
+                }
+
+                int currentShuffleIndex = findCurrentShuffleIndex();
+                int prevShuffleIndex = (currentShuffleIndex - 1 + shuffleIndices.size()) % shuffleIndices.size();
+                int prevTrackIndex = shuffleIndices.get(prevShuffleIndex);
+
+                File shuffleCurrent = playlist.get(shuffleIndices.get(currentShuffleIndex));
+                File shufflePrev = playlist.get(prevTrackIndex);
+                currentTrackIndex.set(prevTrackIndex);
+                play(shufflePrev);
+                notifyTrackChanged(shuffleCurrent, shufflePrev);
+                break;
+
+            case PLAY_MODE_NORMAL:
+            default:
+                // 顺序播放
+                int normalPrevIndex = currentTrackIndex.get() - 1;
+                if (normalPrevIndex < 0) {
+                    // 如果是第一首，回到开头
+                    normalPrevIndex = 0;
+                }
+                File normalCurrent = getCurrentFile();
+                File normalPrev = playlist.get(normalPrevIndex);
+                currentTrackIndex.set(normalPrevIndex);
+                play(normalPrev);
+                if (normalCurrent != null) {
+                    notifyTrackChanged(normalCurrent, normalPrev);
+                }
+                break;
+        }
+    }
+
+    /**
+     * 查找当前曲目在随机列表中的位置
+     */
+    private int findCurrentShuffleIndex() {
+        int currentIndex = currentTrackIndex.get();
+        for (int i = 0; i < shuffleIndices.size(); i++) {
+            if (shuffleIndices.get(i) == currentIndex) {
+                return i;
+            }
+        }
+        return 0;
     }
 
     // 事件监听器管理
@@ -494,56 +715,169 @@ public class AdvancedStreamAudioPlayer {
     }
 
     private void notifyPlaybackStarted(File file) {
-        listeners.forEach(listener -> listener.onPlaybackStarted(file));
+        executorService.submit(() -> {
+            for (PlaybackEventListener listener : listeners) {
+                try {
+                    listener.onPlaybackStarted(file);
+                } catch (Exception e) {
+                    // 防止监听器异常影响播放
+                    e.printStackTrace();
+                }
+            }
+        });
     }
 
     private void notifyPlaybackPaused() {
-        listeners.forEach(PlaybackEventListener::onPlaybackPaused);
+        executorService.submit(() -> {
+            for (PlaybackEventListener listener : listeners) {
+                try {
+                    listener.onPlaybackPaused();
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        });
     }
 
     private void notifyPlaybackResumed() {
-        listeners.forEach(PlaybackEventListener::onPlaybackResumed);
+        executorService.submit(() -> {
+            for (PlaybackEventListener listener : listeners) {
+                try {
+                    listener.onPlaybackResumed();
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        });
     }
 
     private void notifyPlaybackStopped() {
-        listeners.forEach(PlaybackEventListener::onPlaybackStopped);
+        executorService.submit(() -> {
+            for (PlaybackEventListener listener : listeners) {
+                try {
+                    listener.onPlaybackStopped();
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        });
     }
 
     private void notifyPlaybackFinished() {
-        listeners.forEach(PlaybackEventListener::onPlaybackFinished);
+        executorService.submit(() -> {
+            for (PlaybackEventListener listener : listeners) {
+                try {
+                    listener.onPlaybackFinished();
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        });
     }
 
     private void notifyTrackChanged(File previous, File next) {
-        listeners.forEach(listener -> listener.onTrackChanged(previous, next));
+        executorService.submit(() -> {
+            for (PlaybackEventListener listener : listeners) {
+                try {
+                    listener.onTrackChanged(previous, next);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        });
     }
 
     private void notifyError(Exception e) {
-        listeners.forEach(listener -> listener.onError(e));
+        executorService.submit(() -> {
+            for (PlaybackEventListener listener : listeners) {
+                try {
+                    listener.onError(e);
+                } catch (Exception ex) {
+                    ex.printStackTrace();
+                }
+            }
+        });
     }
 
     private void notifyPositionChanged(double position) {
-        listeners.forEach(listener -> listener.onPositionChanged(position));
+        executorService.submit(() -> {
+            for (PlaybackEventListener listener : listeners) {
+                try {
+                    listener.onPositionChanged(position);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        });
     }
 
     private void notifyVolumeChanged(double volume) {
-        listeners.forEach(listener -> listener.onVolumeChanged(volume));
+        executorService.submit(() -> {
+            for (PlaybackEventListener listener : listeners) {
+                try {
+                    listener.onVolumeChanged(volume);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        });
     }
 
-    // 流式播放核心逻辑（改进版）
+    private void notifyPlayModeChanged(int newMode) {
+        executorService.submit(() -> {
+            for (PlaybackEventListener listener : listeners) {
+                try {
+                    listener.onPlayModeChanged(newMode);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        });
+    }
+
+    private void notifyPlaylistUpdated() {
+        executorService.submit(() -> {
+            for (PlaybackEventListener listener : listeners) {
+                try {
+                    listener.onPlaylistUpdated();
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        });
+    }
+
+    // 流式播放核心逻辑
     private void streamPlayback() {
         try {
             sourceDataLine.start();
             int bytesRead;
 
-            while (playing) {
+            while (playing && !Thread.currentThread().isInterrupted()) {
                 synchronized (playLock) {
-                    while (paused) {
-                        playLock.wait();
+                    while (paused && playing) {
+                        try {
+                            playLock.wait();
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        }
                     }
                 }
 
+                if (Thread.currentThread().isInterrupted() || !playing) {
+                    break;
+                }
+
                 // 读取音频数据
-                bytesRead = audioStream.read(audioBuffer, 0, bufferSize);
+                bytesRead = 0;
+                synchronized (audioStreamLock) {
+                    if (audioStream != null) {
+                        bytesRead = audioStream.read(audioBuffer, 0, bufferSize);
+                    } else {
+                        break;
+                    }
+                }
 
                 if (bytesRead == -1) {
                     // 播放完成
@@ -551,7 +885,7 @@ public class AdvancedStreamAudioPlayer {
                     break;
                 }
 
-                if (bytesRead > 0) {
+                if (bytesRead > 0 && sourceDataLine != null) {
                     // 写入音频设备
                     sourceDataLine.write(audioBuffer, 0, bytesRead);
 
@@ -566,9 +900,13 @@ public class AdvancedStreamAudioPlayer {
                 }
             }
 
-            sourceDataLine.drain();
-        } catch (IOException | InterruptedException e) {
-            notifyError(e);
+            if (sourceDataLine != null) {
+                sourceDataLine.drain();
+            }
+        } catch (IOException e) {
+            if (!Thread.currentThread().isInterrupted()) {
+                notifyError(e);
+            }
         } finally {
             if (playing) {
                 closeResources();
@@ -580,22 +918,23 @@ public class AdvancedStreamAudioPlayer {
     private void handlePlaybackCompletion() {
         notifyPlaybackFinished();
 
-        if (repeatMode || !playlist.isEmpty()) {
-            try {
-                if (playlist.size() > 1) {
-                    nextTrack();
-                } else {
-                    // 单曲循环
-                    seekToFrame(0);
-                    if (paused) {
-                        resume();
+        try {
+            // 根据播放模式处理下一首
+            if (playlist.isEmpty()) {
+                // 如果播放列表为空，停止播放
+                stop();
+            } else {
+                // 使用线程池处理下一首播放
+                executorService.submit(() -> {
+                    try {
+                        nextTrack();
+                    } catch (Exception e) {
+                        notifyError(e);
                     }
-                }
-            } catch (Exception e) {
-                notifyError(e);
+                });
             }
-        } else {
-            stop();
+        } catch (Exception e) {
+            notifyError(e);
         }
     }
 
@@ -618,14 +957,16 @@ public class AdvancedStreamAudioPlayer {
 
     private void closeResources() {
         try {
+            synchronized (audioStreamLock) {
+                if (audioStream != null) {
+                    audioStream.close();
+                    audioStream = null;
+                }
+            }
             if (sourceDataLine != null) {
                 sourceDataLine.stop();
                 sourceDataLine.close();
                 sourceDataLine = null;
-            }
-            if (audioStream != null) {
-                audioStream.close();
-                audioStream = null;
             }
         } catch (IOException e) {
             notifyError(e);
@@ -656,10 +997,24 @@ public class AdvancedStreamAudioPlayer {
         stats.put("当前曲目播放次数", playCount.getOrDefault(
                 audioFile != null ? audioFile.getName() : "", 0));
         stats.put("播放列表大小", playlist.size());
+        stats.put("当前播放模式", getPlayModeDescription(playMode));
         return stats;
     }
 
-    // 保留原有的基础功能方法（音量控制、位置获取等）
+    /**
+     * 获取播放模式描述
+     */
+    private String getPlayModeDescription(int mode) {
+        switch (mode) {
+            case PLAY_MODE_NORMAL: return "顺序播放";
+            case PLAY_MODE_REPEAT_ONE: return "单曲循环";
+            case PLAY_MODE_REPEAT_ALL: return "顺序循环";
+            case PLAY_MODE_SHUFFLE: return "无序循环";
+            default: return "未知模式";
+        }
+    }
+
+    // 保留原有的基础功能方法
     public boolean setVolume(double volume) {
         if (!volumeSupported || volumeControl == null) return false;
 
@@ -693,10 +1048,25 @@ public class AdvancedStreamAudioPlayer {
         return totalFrames > 0 ? (double) currentFrame / totalFrames : 0;
     }
 
+    // 获取播放列表
+    public List<File> getPlaylist() {
+        return new ArrayList<>(playlist);
+    }
+
+    // 获取当前播放文件
+    public File getCurrentFile() {
+        int index = currentTrackIndex.get();
+        if (index >= 0 && index < playlist.size()) {
+            return playlist.get(index);
+        }
+        return null;
+    }
+
     // 测试主方法
     public static void main(String[] args) {
+        AdvancedStreamAudioPlayer player = null;
         try {
-            AdvancedStreamAudioPlayer player = new AdvancedStreamAudioPlayer();
+            player = new AdvancedStreamAudioPlayer();
 
             // 添加事件监听器
             player.addPlaybackEventListener(new PlaybackEventListener() {
@@ -720,6 +1090,7 @@ public class AdvancedStreamAudioPlayer {
                 }
                 @Override public void onError(Exception e) {
                     System.err.println("播放错误: " + e.getMessage());
+                    e.printStackTrace();
                 }
                 @Override public void onPositionChanged(double position) {
                     System.out.printf("播放进度: %.1f%%\n", position * 100);
@@ -727,32 +1098,106 @@ public class AdvancedStreamAudioPlayer {
                 @Override public void onVolumeChanged(double volume) {
                     System.out.printf("音量改变: %.0f%%\n", volume * 100);
                 }
+                @Override public void onPlayModeChanged(int newMode) {
+                    System.out.println("播放模式改变: " + newMode);
+                }
+                @Override public void onPlaylistUpdated() {
+                    System.out.println("播放列表已更新");
+                }
             });
 
-            // 测试播放
-            player.play("114.wav");
+            // 创建测试文件列表
+            List<File> testFiles = new ArrayList<>();
+            for (int i = 1; i <= 5; i++) {
+                File file = new File("test" + i + ".wav");
+                if (file.exists()) {
+                    testFiles.add(file);
+                }
+            }
+
+            if (testFiles.isEmpty()) {
+                System.out.println("请创建test1.wav到test5.wav测试文件");
+                return;
+            }
+
+            // 添加到播放列表
+            player.addToPlaylist(testFiles);
+
+            // 测试不同的播放模式
+            System.out.println("\n=== 测试顺序播放 ===");
+            player.setPlayMode(AdvancedStreamAudioPlayer.PLAY_MODE_NORMAL);
+            player.play(testFiles.get(0).getAbsolutePath());
+            TimeUnit.SECONDS.sleep(2);
+
+            // 测试暂停/恢复
+            System.out.println("\n=== 测试暂停/恢复 ===");
+            player.pause();
+            TimeUnit.SECONDS.sleep(1);
+
+            player.resume();
             TimeUnit.SECONDS.sleep(2);
 
             // 测试音量控制
+            System.out.println("\n=== 测试音量控制 ===");
             player.setVolume(0.5);
             TimeUnit.SECONDS.sleep(1);
 
-            // 测试跳转
-            player.seekToTime(20.0);
-            TimeUnit.SECONDS.sleep(3);
+            player.increaseVolume(0.2);
+            TimeUnit.SECONDS.sleep(1);
+
+            player.decreaseVolume(0.3);
+            TimeUnit.SECONDS.sleep(1);
 
             // 测试跳转
-            player.seekToTime(0.0);
-            TimeUnit.SECONDS.sleep(3);
+            System.out.println("\n=== 测试跳转功能 ===");
+            boolean seekResult = player.seekToTime(5.0);
+            System.out.println("跳转结果: " + seekResult);
+            TimeUnit.SECONDS.sleep(2);
 
-            // 测试跳转
-            player.seekToTime(120.0);
-            TimeUnit.SECONDS.sleep(3);
+            seekResult = player.seekToTime(10.0);
+            System.out.println("跳转结果: " + seekResult);
+            TimeUnit.SECONDS.sleep(2);
 
             player.stop();
 
+            // 测试单曲循环
+            System.out.println("\n=== 测试单曲循环 ===");
+            player.setPlayMode(AdvancedStreamAudioPlayer.PLAY_MODE_REPEAT_ONE);
+            player.play(testFiles.get(1).getAbsolutePath());
+            TimeUnit.SECONDS.sleep(3);
+            player.stop();
+
+            // 测试顺序循环
+            System.out.println("\n=== 测试顺序循环 ===");
+            player.setPlayMode(AdvancedStreamAudioPlayer.PLAY_MODE_REPEAT_ALL);
+            player.addToPlaylist(testFiles);
+            player.play(testFiles.get(0).getAbsolutePath());
+            TimeUnit.SECONDS.sleep(2);
+            player.nextTrack();
+            TimeUnit.SECONDS.sleep(2);
+            player.stop();
+
+            // 测试无序循环
+            System.out.println("\n=== 测试无序循环 ===");
+            player.setPlayMode(AdvancedStreamAudioPlayer.PLAY_MODE_SHUFFLE);
+            player.play(testFiles.get(2).getAbsolutePath());
+            TimeUnit.SECONDS.sleep(2);
+            player.nextTrack();
+            TimeUnit.SECONDS.sleep(2);
+            player.stop();
+
+            // 显示统计信息
+            System.out.println("\n=== 播放统计 ===");
+            Map<String, Object> stats = player.getPlaybackStatistics();
+            stats.forEach((k, v) -> System.out.println(k + ": " + v));
+
         } catch (Exception e) {
             e.printStackTrace();
+        } finally {
+            if (player != null) {
+                player.shutdown();
+                System.out.println("播放器已关闭");
+            }
         }
     }
 }
