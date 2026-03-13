@@ -3,9 +3,13 @@ plugins {
 }
 
 group = "cn.ncw.music"
-version = "1.0.3"
+version = "1.0.4"
 
 repositories {
+    flatDir {
+        dirs("libs")
+    }
+
     mavenCentral()
 }
 
@@ -16,6 +20,9 @@ dependencies {
     compileOnly("org.projectlombok:lombok:1.18.42")
     annotationProcessor("org.projectlombok:lombok:1.18.42")
     implementation("ws.schild:jave-all-deps:3.5.0")
+
+    // NCW Logger
+    implementation(name ,"NCW-Logger-1.0.4")
 
     // SLF4J API
     implementation("org.slf4j:slf4j-api:1.7.32")
