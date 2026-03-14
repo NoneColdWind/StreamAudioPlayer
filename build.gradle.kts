@@ -3,7 +3,7 @@ plugins {
 }
 
 group = "cn.ncw.music"
-version = "1.0.4"
+version = "1.0.4-hotfix1"
 
 repositories {
     flatDir {

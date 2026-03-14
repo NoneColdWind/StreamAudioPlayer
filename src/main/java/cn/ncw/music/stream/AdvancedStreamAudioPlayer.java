@@ -44,6 +44,7 @@ public class AdvancedStreamAudioPlayer {
         REPEAT_ALL("顺序循环"),
         SHUFFLE("随机播放");
 
+        @Getter
         private final String description;
 
         PlayMode(String description) {
@@ -457,7 +458,7 @@ public class AdvancedStreamAudioPlayer {
      * 播放指定文件
      */
     public void play(String filePath) throws UnsupportedAudioFileException,
-            IOException, LineUnavailableException, InterruptedException {
+            IOException, LineUnavailableException {
         validateFilePath(filePath);
         play(new File(filePath));
     }
@@ -466,7 +467,7 @@ public class AdvancedStreamAudioPlayer {
      * 播放指定文件
      */
     public void play(File file) throws UnsupportedAudioFileException,
-            IOException, LineUnavailableException, InterruptedException {
+            IOException, LineUnavailableException {
         validateFile(file);
 
         // 停止当前播放
@@ -499,6 +500,15 @@ public class AdvancedStreamAudioPlayer {
 
         // 启动播放线程
         startPlaybackThread();
+    }
+
+    public void play(int index) throws UnsupportedAudioFileException,
+            LineUnavailableException, IOException {
+        if (index > playlistManager.playlist.size()) {
+            throw new ArrayIndexOutOfBoundsException(index + " is out of list.");
+        }
+        File file = playlistManager.playlist.get(index);
+        play(file);
     }
 
     /**
