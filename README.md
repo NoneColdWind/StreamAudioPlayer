@@ -5,15 +5,15 @@
 ## 快速开始
 #### **·JDK要求**：Java 21或更高版本
 #### **·构建项目**：
->\# **克隆项目**
+>     # 克隆项目
 > 
->#### git clone https://github.com/NoneColdWind/StreamAudioPlayer.git
+>     git clone https://github.com/NoneColdWind/StreamAudioPlayer.git
 > 
->#### cd StreamAudioPlayer
+>     cd StreamAudioPlayer
 > 
->\# **使用Gradle构建**
+>     # 使用Gradle构建
 > 
->#### ./gradlew build
+>     ./gradlew build
 
 #### **·使用gradle添加依赖**：
 > #### build.gradle.kts
