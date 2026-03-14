@@ -832,7 +832,7 @@ public class AdvancedStreamAudioPlayer {
             eventPublisher.firePositionChanged(getPlaybackProgress());
             return true;
         } catch (Exception e) {
-            this.logger.error("Failed to seek to frame: {}", String.valueOf(frame), e);
+            this.logger.error("Failed to seek to frame: " + frame, "seekToFrame", e);
             eventPublisher.fireError(e);
             return false;
         }
@@ -910,7 +910,7 @@ public class AdvancedStreamAudioPlayer {
                 eventPublisher.fireTrackChanged(current, next);
             }
         } catch (Exception e) {
-            this.logger.error("Failed to play next track", "nextTrack", e);
+            this.logger.error("Failed to play next track.", "nextTrack", e);
             eventPublisher.fireError(e);
         }
     }
@@ -934,7 +934,7 @@ public class AdvancedStreamAudioPlayer {
                 eventPublisher.fireTrackChanged(current, previous);
             }
         } catch (Exception e) {
-            this.logger.error("Failed to play previous track", "previousTrack", e);
+            this.logger.error("Failed to play previous track.", "previousTrack", e);
             eventPublisher.fireError(e);
         }
     }
@@ -1000,7 +1000,7 @@ public class AdvancedStreamAudioPlayer {
                     int bytesWritten = sourceDataLine.write(audioBuffer, 0, bytesRead);
 
                     if (bytesWritten != bytesRead) {
-                        this.logger.warn("Bytes written (" + bytesWritten + ") doesn't match bytes read (" + bytesRead + ")", "streamPlayback");
+                        this.logger.warn("Bytes written (" + bytesWritten + ") doesn't match bytes read (" + bytesRead + ").", "streamPlayback");
                     }
 
                     // 更新当前位置
@@ -1019,7 +1019,7 @@ public class AdvancedStreamAudioPlayer {
             }
         } catch (IOException e) {
             if (!Thread.currentThread().isInterrupted()) {
-                this.logger.error("I/O error during playback", "streamPlayback", e);
+                this.logger.error("I/O error during playback.", "streamPlayback", e);
                 eventPublisher.fireError(e);
             }
         } finally {
@@ -1042,7 +1042,7 @@ public class AdvancedStreamAudioPlayer {
                     nextTrack();
                 }
             } catch (Exception e) {
-                this.logger.error("Error handling playback completion", "handlePlaybackCompletion", e);
+                this.logger.error("Error handling playback completion.", "handlePlaybackCompletion", e);
                 eventPublisher.fireError(e);
             }
         });
@@ -1104,7 +1104,7 @@ public class AdvancedStreamAudioPlayer {
                 audioStream = null;
             }
         } catch (IOException e) {
-            this.logger.error("Error closing audio stream", "closeAudioStream", e);
+            this.logger.error("Error closing audio stream.", "closeAudioStream", e);
         }
     }
 
@@ -1123,7 +1123,7 @@ public class AdvancedStreamAudioPlayer {
                 }
                 sourceDataLine.close();
             } catch (Exception e) {
-                this.logger.error("Error closing source data line", "closeResources", e);
+                this.logger.error("Error closing source data line.", "closeResources", e);
             } finally {
                 sourceDataLine = null;
             }
