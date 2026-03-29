@@ -1,5 +1,6 @@
 package cn.ncw.music.stream;
 
+import cn.ncw.logger.log.NCWLoggerFactory;
 import lombok.Getter;
 
 import javax.sound.sampled.*;
@@ -12,23 +13,21 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
-import cn.ncw.logger.log.NCWLoggerFactory;
-
 /**
  * 多功能流式媒体播放器 - 支持多种音频格式和高级功能
  * <p>
  * 优化要点：
- * 1. 使用枚举替代int常量，提高类型安全性
- * 2. 提取播放列表管理器，分离职责
- * 3. 提取事件发布器，解耦事件处理
- * 4. 强化资源管理和异常处理
- * 5. 优化线程安全和并发控制
- * 6. 改进API设计，提高可用性
+ * 1. 修复字节写入不匹配问题
+ * 2. 使用枚举替代int常量，提高类型安全性
+ * 3. 提取播放列表管理器，分离职责
+ * 4. 提取事件发布器，解耦事件处理
+ * 5. 强化资源管理和异常处理
+ * 6. 优化线程安全和并发控制
+ * 7. 改进API设计，提高可用性
  */
 
 public class AdvancedStreamAudioPlayer {
 
-    @Getter
     private final NCWLoggerFactory logger;
 
     // 播放状态枚举
@@ -44,13 +43,21 @@ public class AdvancedStreamAudioPlayer {
         REPEAT_ALL("顺序循环"),
         SHUFFLE("随机播放");
 
-        @Getter
         private final String description;
 
         PlayMode(String description) {
             this.description = description;
         }
 
+    }
+
+    private PlayMode getPlayModeFromString(String playModeString) {
+        return switch (playModeString) {
+            case "REPEAT_ONE" -> PlayMode.REPEAT_ONE;
+            case "REPEAT_ALL" -> PlayMode.REPEAT_ALL;
+            case "SHUFFLE" -> PlayMode.SHUFFLE;
+            default -> PlayMode.NORMAL;
+        };
     }
 
     // 支持的文件格式
@@ -148,7 +155,7 @@ public class AdvancedStreamAudioPlayer {
      */
     private class PlaylistManager {
         private final List<File> playlist = new CopyOnWriteArrayList<>();
-        private final AtomicInteger currentIndex = new AtomicInteger(-1);
+        private final AtomicInteger currentIndex = new AtomicInteger(0);
         @Getter
         private volatile PlayMode playMode = PlayMode.NORMAL;
         private List<Integer> shuffleIndices = Collections.emptyList();
@@ -255,7 +262,6 @@ public class AdvancedStreamAudioPlayer {
                     int currentIdx = findCurrentShuffleIndex();
                     int nextShuffleIdx = (currentIdx + 1) % shuffleIndices.size();
                     return shuffleIndices.get(nextShuffleIdx);
-
                 case NORMAL:
                 default:
                     int normalNext = currentIndex.get() + 1;
@@ -328,13 +334,11 @@ public class AdvancedStreamAudioPlayer {
     /**
      * 事件发布器 - 职责分离
      */
-    private static class PlaybackEventPublisher {
+    private class PlaybackEventPublisher {
         private final List<PlaybackEventListener> listeners = new CopyOnWriteArrayList<>();
         private final ExecutorService executor;
-        private final NCWLoggerFactory logger;
 
-        public PlaybackEventPublisher(ExecutorService executor, NCWLoggerFactory logger) {
-            this.logger = logger;
+        public PlaybackEventPublisher(ExecutorService executor) {
             this.executor = executor;
         }
 
@@ -400,7 +404,7 @@ public class AdvancedStreamAudioPlayer {
                     try {
                         action.accept(listener);
                     } catch (Exception e) {
-                        logger.error("Error in listener during {} event", eventName, e);
+                        logger.error("Error in listener during " + eventName + " event", "fireEvent", e);
                     }
                 }
             });
@@ -427,19 +431,18 @@ public class AdvancedStreamAudioPlayer {
     /**
      * 默认构造函数
      */
-    public AdvancedStreamAudioPlayer(NCWLoggerFactory logger) {
-        this(DEFAULT_BUFFER_SIZE, logger);
+    public AdvancedStreamAudioPlayer(NCWLoggerFactory loggerFactory) {
+        this(DEFAULT_BUFFER_SIZE, loggerFactory);
     }
 
     /**
      * 可配置缓冲大小的构造函数
      */
-    public AdvancedStreamAudioPlayer(int bufferSize, NCWLoggerFactory logger) {
+    public AdvancedStreamAudioPlayer(int bufferSize, NCWLoggerFactory loggerFactory) {
+        this.logger = loggerFactory;
         this.bufferSize = bufferSize > 0 ? bufferSize : DEFAULT_BUFFER_SIZE;
-        this.logger = logger;
         this.audioBuffer = new byte[this.bufferSize];
         this.playlistManager = new PlaylistManager();
-
 
         // 初始化线程池
         this.executorService = Executors.newCachedThreadPool(r -> {
@@ -447,18 +450,33 @@ public class AdvancedStreamAudioPlayer {
             thread.setDaemon(true);
             thread.setName("AudioPlayer-Worker-" + thread.threadId());
             thread.setUncaughtExceptionHandler((t, e) ->
-                    this.logger.error("Uncaught exception in AudioPlayer worker thread", t.getName(), (Exception) e));
+                    logger.error("Uncaught exception in AudioPlayer worker thread", "AudioPlayer", (Exception) e));
             return thread;
         });
 
-        this.eventPublisher = new PlaybackEventPublisher(executorService, logger);
+        this.eventPublisher = new PlaybackEventPublisher(executorService);
+    }
+
+    public void play(int index) throws UnsupportedAudioFileException,
+            LineUnavailableException, IOException, InterruptedException {
+        play(playlistManager.playlist.get(index));
+    }
+
+    public void playFirst() throws UnsupportedAudioFileException,
+            LineUnavailableException, IOException, InterruptedException {
+        play(playlistManager.playlist.getFirst());
+    }
+
+    public void playLast() throws UnsupportedAudioFileException,
+            LineUnavailableException, IOException, InterruptedException {
+        play(playlistManager.playlist.getLast());
     }
 
     /**
      * 播放指定文件
      */
     public void play(String filePath) throws UnsupportedAudioFileException,
-            IOException, LineUnavailableException {
+            IOException, LineUnavailableException, InterruptedException {
         validateFilePath(filePath);
         play(new File(filePath));
     }
@@ -467,7 +485,7 @@ public class AdvancedStreamAudioPlayer {
      * 播放指定文件
      */
     public void play(File file) throws UnsupportedAudioFileException,
-            IOException, LineUnavailableException {
+            IOException, LineUnavailableException, InterruptedException {
         validateFile(file);
 
         // 停止当前播放
@@ -502,15 +520,6 @@ public class AdvancedStreamAudioPlayer {
         startPlaybackThread();
     }
 
-    public void play(int index) throws UnsupportedAudioFileException,
-            LineUnavailableException, IOException {
-        if (index > playlistManager.playlist.size()) {
-            throw new ArrayIndexOutOfBoundsException(index + " is out of list.");
-        }
-        File file = playlistManager.playlist.get(index);
-        play(file);
-    }
-
     /**
      * 准备音频流
      */
@@ -524,7 +533,12 @@ public class AdvancedStreamAudioPlayer {
             originalFormat = audioStream.getFormat();
 
             // 计算音频信息
-            totalFrames.set(audioStream.getFrameLength());
+            long totalFramesValue = audioStream.getFrameLength();
+            if (totalFramesValue == AudioSystem.NOT_SPECIFIED) {
+                // 如果帧数未指定，尝试获取近似值
+                totalFramesValue = estimateTotalFrames(file.length(), originalFormat);
+            }
+            totalFrames.set(totalFramesValue);
             frameSize = originalFormat.getFrameSize();
             currentFrame.set(0);
 
@@ -541,9 +555,22 @@ public class AdvancedStreamAudioPlayer {
                 );
                 audioStream = AudioSystem.getAudioInputStream(targetFormat, audioStream);
                 frameSize = targetFormat.getFrameSize();
-                totalFrames.set(audioStream.getFrameLength());
+                long convertedFrames = audioStream.getFrameLength();
+                if (convertedFrames != AudioSystem.NOT_SPECIFIED) {
+                    totalFrames.set(convertedFrames);
+                }
             }
         }
+    }
+
+    /**
+     * 估算总帧数
+     */
+    private long estimateTotalFrames(long fileSize, AudioFormat format) {
+        if (frameSize <= 0) {
+            return 0;
+        }
+        return fileSize / frameSize;
     }
 
     /**
@@ -586,6 +613,7 @@ public class AdvancedStreamAudioPlayer {
                 playbackThread.join(1000);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+                logger.error("Interrupted while waiting for playback thread to finish", "cleanup", e);
             } finally {
                 playbackThread = null;
             }
@@ -622,7 +650,7 @@ public class AdvancedStreamAudioPlayer {
                 setVolume(currentVolume.get());
             } catch (IllegalArgumentException ex) {
                 volumeSupported = false;
-                throw ex;
+                logger.error("Volume control not supported on this audio line", "initVolume", ex);
             }
         }
     }
@@ -717,7 +745,7 @@ public class AdvancedStreamAudioPlayer {
                 if (!executorService.awaitTermination(5, TimeUnit.SECONDS)) {
                     List<Runnable> remainingTasks = executorService.shutdownNow();
                     if (!remainingTasks.isEmpty()) {
-                        this.logger.warn("Forcefully terminated {" + remainingTasks.size() + "} remaining tasks", "shutdown");
+                        logger.warn("Forcefully terminated " + "remainingTasks.size()" + " remaining tasks", "shutdown");
                     }
                 }
             } catch (InterruptedException e) {
@@ -732,9 +760,9 @@ public class AdvancedStreamAudioPlayer {
     /**
      * 设置音量
      */
-    public void setVolume(double volume) {
+    public boolean setVolume(double volume) {
         if (!volumeSupported || volumeControl == null) {
-            return;
+            return false;
         }
 
         double newVolume = Math.max(0.0, Math.min(1.0, volume));
@@ -742,10 +770,7 @@ public class AdvancedStreamAudioPlayer {
 
         try {
             if (volumeControl.getType() == FloatControl.Type.MASTER_GAIN) {
-                float dB = (float) (Math.log10(newVolume == 0 ? 0.0001 : newVolume) * 20.0);
-                dB = Math.max(minVolume, Math.min(maxVolume, dB));
-                volumeControl.setValue(dB);
-            } else {
+
                 float linearVolume = (float) (minVolume + (maxVolume - minVolume) * newVolume);
                 volumeControl.setValue(linearVolume);
             }
@@ -753,32 +778,34 @@ public class AdvancedStreamAudioPlayer {
             if (Math.abs(newVolume - oldVolume) > 0.01) {
                 eventPublisher.fireVolumeChanged(newVolume);
             }
+            return true;
         } catch (IllegalArgumentException e) {
             currentVolume.set(oldVolume); // 恢复原值
-            throw e;
+            logger.error("Failed to set volume", "setVolume", e);
+            return false;
         }
     }
 
     /**
      * 增加音量
      */
-    public void increaseVolume(double increment) {
+    public boolean increaseVolume(double increment) {
         if (increment < 0) {
             throw new IllegalArgumentException("音量增量不能为负数");
         }
         double newVolume = Math.min(1.0, currentVolume.get() + increment);
-        setVolume(newVolume);
+        return setVolume(newVolume);
     }
 
     /**
      * 减小音量
      */
-    public void decreaseVolume(double decrement) {
+    public boolean decreaseVolume(double decrement) {
         if (decrement < 0) {
             throw new IllegalArgumentException("音量减量不能为负数");
         }
         double newVolume = Math.max(0.0, currentVolume.get() - decrement);
-        setVolume(newVolume);
+        return setVolume(newVolume);
     }
 
     // ==================== 位置控制 ====================
@@ -842,13 +869,20 @@ public class AdvancedStreamAudioPlayer {
             eventPublisher.firePositionChanged(getPlaybackProgress());
             return true;
         } catch (Exception e) {
-            this.logger.error("Failed to seek to frame: " + frame, "seekToFrame", e);
+            logger.error("Failed to seek to frame: " + frame, "seekToFrame", e);
             eventPublisher.fireError(e);
             return false;
         }
     }
 
     // ==================== 播放列表管理 ====================
+
+    public void addToPlaylist(String filePath) {
+        boolean added = playlistManager.addToPlaylist(new File(filePath));
+        if (added) {
+            eventPublisher.firePlaylistUpdated();
+        }
+    }
 
     public void addToPlaylist(File file) {
         boolean added = playlistManager.addToPlaylist(file);
@@ -857,8 +891,19 @@ public class AdvancedStreamAudioPlayer {
         }
     }
 
-    public void addToPlaylist(List<File> files) {
-        boolean added = playlistManager.addToPlaylist(files);
+    public void addToPlaylist(List<?> files) {
+        List<File> list = new ArrayList<>();
+        for (Object file : files) {
+            if (file instanceof File) {
+                list.add((File) file);
+            } else if (file instanceof String) {
+                list.add(new File((String) file));
+            } else {
+                logger.error("Unsupported type.", "addToPlaylist");
+            }
+        }
+
+        boolean added = playlistManager.addToPlaylist(list);
         if (added) {
             eventPublisher.firePlaylistUpdated();
         }
@@ -880,8 +925,25 @@ public class AdvancedStreamAudioPlayer {
         return playlistManager.getPlaylist();
     }
 
+    public List<String> getPlaylistPath() {
+        List<String> path = new ArrayList<>();
+        List<File> list = playlistManager.getPlaylist();
+        for (File f : list) {
+            path.add(f.getAbsolutePath());
+        }
+        return path;
+    }
+
     public File getCurrentFile() {
         return playlistManager.getCurrentFile();
+    }
+
+    public String getCurrentFilePath() {
+        return Objects.requireNonNull(playlistManager.getCurrentFile()).getAbsolutePath();
+    }
+
+    public void setPlayMode(String mode) {
+        setPlayMode(getPlayModeFromString(mode));
     }
 
     public void setPlayMode(PlayMode mode) {
@@ -898,6 +960,11 @@ public class AdvancedStreamAudioPlayer {
     public PlayMode getPlayMode() {
         return playlistManager.getPlayMode();
     }
+
+    public String getPlayModeDescription() {
+        return playlistManager.getPlayMode().name();
+    }
+
 
     /**
      * 播放下一首
@@ -920,7 +987,7 @@ public class AdvancedStreamAudioPlayer {
                 eventPublisher.fireTrackChanged(current, next);
             }
         } catch (Exception e) {
-            this.logger.error("Failed to play next track.", "nextTrack", e);
+            logger.error("Failed to play next track.", "nextTrack", e);
             eventPublisher.fireError(e);
         }
     }
@@ -944,7 +1011,7 @@ public class AdvancedStreamAudioPlayer {
                 eventPublisher.fireTrackChanged(current, previous);
             }
         } catch (Exception e) {
-            this.logger.error("Failed to play previous track.", "previousTrack", e);
+            logger.error("Failed to play previous track.", "previousTrack", e);
             eventPublisher.fireError(e);
         }
     }
@@ -966,12 +1033,11 @@ public class AdvancedStreamAudioPlayer {
     // ==================== 核心播放逻辑 ====================
 
     /**
-     * 流式播放核心逻辑
+     * 流式播放核心逻辑 - 修复字节写入不匹配问题
      */
     private void streamPlayback() {
         try {
             sourceDataLine.start();
-            int bytesRead;
 
             while (playing.get() && !Thread.currentThread().isInterrupted()) {
                 synchronized (playControlLock) {
@@ -990,7 +1056,7 @@ public class AdvancedStreamAudioPlayer {
                 }
 
                 // 读取音频数据
-                bytesRead = 0;
+                int bytesRead = 0;
                 synchronized (audioStreamLock) {
                     if (audioStream != null) {
                         bytesRead = audioStream.read(audioBuffer, 0, bufferSize);
@@ -1006,11 +1072,39 @@ public class AdvancedStreamAudioPlayer {
                 }
 
                 if (bytesRead > 0 && sourceDataLine != null) {
-                    // 写入音频设备
-                    int bytesWritten = sourceDataLine.write(audioBuffer, 0, bytesRead);
+                    // **修复字节写入不匹配问题** - 确保写入所有读取的数据
+                    int bytesWritten = 0;
+
+                    // 循环写入，直到所有数据都被写入
+                    while (bytesWritten < bytesRead &&
+                            playing.get() && !Thread.currentThread().isInterrupted()) {
+
+                        int writeResult = sourceDataLine.write(
+                                audioBuffer, bytesWritten, bytesRead - bytesWritten);
+
+                        if (writeResult < 0) {
+                            // 写入错误
+                            logger.error("Failed to write to audio line, result: " + writeResult, "playback");
+                            break;
+                        }
+
+                        bytesWritten += writeResult;
+
+                        // 检查是否需要暂停
+                        synchronized (playControlLock) {
+                            while (paused.get() && playing.get()) {
+                                try {
+                                    playControlLock.wait();
+                                } catch (InterruptedException e) {
+                                    Thread.currentThread().interrupt();
+                                    break;
+                                }
+                            }
+                        }
+                    }
 
                     if (bytesWritten != bytesRead) {
-                        this.logger.warn("Bytes written (" + bytesWritten + ") doesn't match bytes read (" + bytesRead + ").", "streamPlayback");
+                        logger.warn("Bytes written (" + bytesWritten + ") doesn't match bytes read (" + bytesRead + ")", "playback");
                     }
 
                     // 更新当前位置
@@ -1024,12 +1118,13 @@ public class AdvancedStreamAudioPlayer {
                 }
             }
 
+            // 清空音频线缓冲区
             if (sourceDataLine != null) {
                 sourceDataLine.drain();
             }
         } catch (IOException e) {
             if (!Thread.currentThread().isInterrupted()) {
-                this.logger.error("I/O error during playback.", "streamPlayback", e);
+                logger.error("I/O error during playback.", "playback", e);
                 eventPublisher.fireError(e);
             }
         } finally {
@@ -1052,7 +1147,7 @@ public class AdvancedStreamAudioPlayer {
                     nextTrack();
                 }
             } catch (Exception e) {
-                this.logger.error("Error handling playback completion.", "handlePlaybackCompletion", e);
+                logger.error("Error handling playback completion.", "handlePlayback", e);
                 eventPublisher.fireError(e);
             }
         });
@@ -1114,7 +1209,7 @@ public class AdvancedStreamAudioPlayer {
                 audioStream = null;
             }
         } catch (IOException e) {
-            this.logger.error("Error closing audio stream.", "closeAudioStream", e);
+            logger.error("Error closing audio stream.", "closeStream", e);
         }
     }
 
@@ -1133,7 +1228,7 @@ public class AdvancedStreamAudioPlayer {
                 }
                 sourceDataLine.close();
             } catch (Exception e) {
-                this.logger.error("Error closing source data line.", "closeResources", e);
+                logger.error("Error closing source data line.", "closeResources", e);
             } finally {
                 sourceDataLine = null;
             }
@@ -1241,11 +1336,29 @@ public class AdvancedStreamAudioPlayer {
                 control.setValue(value);
                 return true;
             } catch (IllegalArgumentException e) {
-                this.logger.error("Invalid value for sound effect: " + effectType, "setSoundEffect", e);
+                logger.error("Invalid value for sound effect: " + effectType, "setEffect", e);
                 return false;
             }
         }
         return false;
+    }
+
+    /**
+     * 获取支持的音频格式集合
+     */
+    public static Set<String> getSupportedFormats() {
+        return new HashSet<>(SUPPORTED_FORMATS);
+    }
+
+    /**
+     * 检查是否支持特定格式的文件
+     */
+    public static boolean isFileFormatSupported(String filePath) {
+        if (filePath == null || filePath.isEmpty()) {
+            return false;
+        }
+        String extension = filePath.substring(filePath.lastIndexOf('.') + 1).toLowerCase();
+        return SUPPORTED_FORMATS.contains(extension);
     }
 
     // ==================== 测试主方法 ====================
@@ -1253,11 +1366,11 @@ public class AdvancedStreamAudioPlayer {
     /**
      * 测试主方法
      */
-    public static void main(String[] args) {
+    static void main() {
         AdvancedStreamAudioPlayer player = null;
-        NCWLoggerFactory logger = new NCWLoggerFactory("Test");
+        NCWLoggerFactory loggerFactory = new NCWLoggerFactory("Test");
         try {
-            player = new AdvancedStreamAudioPlayer(logger);
+            player = new AdvancedStreamAudioPlayer(loggerFactory);
 
             // 添加事件监听器
             AdvancedStreamAudioPlayer finalPlayer = player;
@@ -1297,7 +1410,7 @@ public class AdvancedStreamAudioPlayer {
                 @Override
                 public void onError(Exception e) {
                     System.err.println("播放错误: " + e.getMessage());
-                    logger.error("WTF", "main", e);
+                    e.printStackTrace();
                 }
 
                 @Override
@@ -1341,20 +1454,91 @@ public class AdvancedStreamAudioPlayer {
             System.out.println("添加测试文件到播放列表...");
             player.addToPlaylist(testFiles);
 
+            /*
+            // 测试顺序播放
+            System.out.println("\n=== 测试顺序播放 ===");
+            player.setPlayMode(PlayMode.NORMAL);
+            player.play(testFiles.getFirst().getAbsolutePath());
+
+            // 等待2秒
+            Thread.sleep(2000);
+
+            // 测试暂停/恢复
+            System.out.println("\n=== 测试暂停/恢复 ===");
+            player.pause();
+            Thread.sleep(1000);
+            player.resume();
+            Thread.sleep(1000);
+
+            // 测试音量控制
+            System.out.println("\n=== 测试音量控制 ===");
+            player.setVolume(0.5);
+            Thread.sleep(500);
+            player.increaseVolume(0.2);
+            Thread.sleep(500);
+            player.decreaseVolume(0.3);
+            Thread.sleep(1000);
+
+            // 测试跳转
+            System.out.println("\n=== 测试跳转功能 ===");
+            boolean seekResult = player.seekToTime(5.0);
+            System.out.println("跳转结果: " + seekResult);
+            Thread.sleep(2000);
+
+            // 停止播放
+            player.stop();
+
             // 测试单曲循环
             System.out.println("\n=== 测试单曲循环 ===");
             player.setPlayMode(PlayMode.REPEAT_ONE);
-            player.play(testFiles.get(5).getAbsolutePath());
-            Thread.sleep(Long.parseLong(String.valueOf(player.getTotalTime() * 1000).split("\\.")[0]));
+            player.play(testFiles.get(1).getAbsolutePath());
+            Thread.sleep(3000);
             player.stop();
+
+            // 测试顺序循环
+            System.out.println("\n=== 测试顺序循环 ===");
+            player.setPlayMode(PlayMode.REPEAT_ALL);
+            player.play(testFiles.getFirst().getAbsolutePath());
+            Thread.sleep(2000);
+            player.stop();
+
+             */
+
+
+            player.setPlayMode(PlayMode.REPEAT_ALL);
+            player.play(0);
+
+            Thread.sleep(1000);
+
+            player.nextTrack();
+
+            IO.println(player.getAudioMetadata());
+
+            Thread.sleep(1000);
+
+            player.nextTrack();
+
+            IO.println(player.getAudioMetadata());
+
+            Thread.sleep(100000);
+
+            // 显示统计信息
+            System.out.println("\n=== 播放统计 ===");
+            Map<String, Object> stats = player.getPlaybackStatistics();
+            stats.forEach((k, v) -> System.out.println(k + ": " + v));
 
             // 显示音频元数据
             System.out.println("\n=== 音频元数据 ===");
             Map<String, Object> metadata = player.getAudioMetadata();
             metadata.forEach((k, v) -> System.out.println(k + ": " + v));
 
+            // 测试支持的音频格式
+            System.out.println("\n=== 支持的音频格式 ===");
+            Set<String> supportedFormats = AdvancedStreamAudioPlayer.getSupportedFormats();
+            System.out.println("支持的格式: " + String.join(", ", supportedFormats));
+
         } catch (Exception e) {
-            logger.error("WTF", "main", e);
+            e.printStackTrace();
         } finally {
             if (player != null) {
                 player.shutdown();

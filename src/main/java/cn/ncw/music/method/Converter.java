@@ -9,17 +9,22 @@ import java.io.File;
 
 public class Converter {
 
+
     public static void convert(String inputFile, String outputFile, String outputFormat) {
+        convert(inputFile, outputFile, outputFormat, "pcm_s16le", 128000, 2, 48000);
+    }
+
+    public static void convert(String inputFile, String outputFile, String outputFormat, String audioCodec, int bitRate, int channels, int samplingRate) {
         File source = new File(inputFile);
         File target = new File(outputFile);
 
         // 配置音频转换参数
         AudioAttributes audio = new AudioAttributes();
-        // audio.setCodec("pcm_s16le"); // 设置WAV的PCM编码，通常可省略，库会自动处理
-        // 可以根据需要设置比特率、声道数、采样率等
-        // audio.setBitRate(128000);
-        // audio.setChannels(2);
-        // audio.setSamplingRate(44100);
+         audio.setCodec(audioCodec); // 设置WAV的PCM编码，通常可省略，库会自动处理
+        //可以根据需要设置比特率、声道数、采样率等
+        audio.setBitRate(bitRate);
+        audio.setChannels(channels);
+        audio.setSamplingRate(samplingRate);
 
         // 配置编码属性，指定输出格式为WAV
         EncodingAttributes encodingAttributes = new EncodingAttributes();
