@@ -1,0 +1,16 @@
+src/main/java/cn/ncw/music/exception/AudioPlayerException.java
+src/main/java/cn/ncw/music/method/Converter.java
+src/main/java/cn/ncw/music/midi/AdvancedMidiParser.java
+src/main/java/cn/ncw/music/midi/MidiPlayer.java
+src/main/java/cn/ncw/music/midi/enums/MidiInstrument.java
+src/main/java/cn/ncw/music/stream/event/PlaybackEventPublisher.java
+src/main/java/cn/ncw/music/stream/event/PlaybackEventListener.java
+src/main/java/cn/ncw/music/stream/AdvancedStreamAudioPlayer.java
+src/main/java/cn/ncw/music/stream/manager/PlaylistManager.java
+src/main/java/cn/ncw/music/stream/StreamAudioPlayer.java
+src/main/java/cn/ncw/music/stream/enums/PlayMode.java
+src/main/java/cn/ncw/music/stream/enums/PlaybackState.java
+src/test/java/cn/ncw/music/sample/music_1/FirstChannel.java
+src/test/java/cn/ncw/music/sample/music_1/MusicThreadPool.java
+src/test/java/cn/ncw/music/sample/music_1/SecondChannel.java
+src/test/java/cn/ncw/music/stream/StreamAudioPlayerTest.java

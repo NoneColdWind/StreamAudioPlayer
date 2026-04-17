@@ -9,13 +9,28 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * 支持暂停/继续功能和位置调节的流式音频播放器
+ * <p>
+ * 该类提供了基本的音频播放功能，包括：
+ * - 播放、暂停、恢复、停止音频
+ * - 音量控制
+ * - 位置调节（跳转）
+ * - 播放状态查询
  */
 public class StreamAudioPlayer {
 
     // 播放状态常量
+    /** 播放中状态 */
     public static final int STATE_PLAYING = 0;
+    /** 暂停状态 */
     public static final int STATE_PAUSED = 1;
+    /** 停止状态 */
     public static final int STATE_STOPPED = 2;
+
+    // 常量定义
+    /** 默认缓冲区大小 (4KB) */
+    private static final int DEFAULT_BUFFER_SIZE = 4096;
+    /** 默认音量 (80%) */
+    private static final double DEFAULT_VOLUME = 0.8;
 
     // 成员变量
     private SourceDataLine sourceDataLine;
@@ -24,9 +39,8 @@ public class StreamAudioPlayer {
     private volatile boolean playing;
     private volatile boolean paused;
     /**
-     * -- GETTER --
-     *  获取当前播放状态
-     *
+     * 获取当前播放状态
+     * @return 播放状态（STATE_PLAYING、STATE_PAUSED 或 STATE_STOPPED）
      */
     @Getter
     private volatile int playbackState;
@@ -34,13 +48,12 @@ public class StreamAudioPlayer {
 
     // 音量控制相关
     private FloatControl volumeControl;
-    private double currentVolume = 0.8; // 默认音量 80%
+    private double currentVolume = DEFAULT_VOLUME; // 默认音量 80%
     private float minVolume;
     private float maxVolume;
     /**
-     * -- GETTER --
-     *  检查是否支持音量控制
-     *
+     * 检查是否支持音量控制
+     * @return 是否支持音量控制
      */
     @Getter
     private boolean volumeSupported = false;
@@ -49,24 +62,21 @@ public class StreamAudioPlayer {
     private File audioFile;
     private AudioFormat originalFormat;
     /**
-     * -- GETTER --
-     *  获取总帧数
-     *
+     * 获取总帧数
+     * @return 总帧数
      */
     @Getter
     private long totalFrames; // 总帧数
     /**
-     * -- GETTER --
-     *  获取当前帧位置
-     *
+     * 获取当前帧位置
+     * @return 当前帧位置
      */
     @Getter
     private long currentFrame; // 当前帧位置
     private int frameSize; // 每帧的字节数
     /**
-     * -- GETTER --
-     *  检查是否支持位置控制
-     *
+     * 检查是否支持位置控制
+     * @return 是否支持位置控制
      */
     @Getter
     private boolean positionSupported = true;
@@ -422,6 +432,10 @@ public class StreamAudioPlayer {
         }
     }
 
+    /**
+     * 静音
+     * @return 是否设置成功
+     */
     public boolean setMute() {
         return setVolume(0.0);
     }
@@ -483,11 +497,13 @@ public class StreamAudioPlayer {
         return sourceDataLine != null ? sourceDataLine.getFormat() : null;
     }
 
-    // 流式播放核心逻辑
+    /**
+     * 流式播放核心逻辑
+     */
     private void streamPlayback() {
         try {
             sourceDataLine.start();
-            int bufferSize = 4096; // 4KB缓冲区
+            int bufferSize = DEFAULT_BUFFER_SIZE; // 4KB缓冲区
             byte[] buffer = new byte[bufferSize];
             int bytesRead;
 
@@ -533,7 +549,9 @@ public class StreamAudioPlayer {
         }
     }
 
-    // 关闭音频资源
+    /**
+     * 关闭音频资源
+     */
     private void closeResources() {
         try {
             if (sourceDataLine != null) {
@@ -550,7 +568,11 @@ public class StreamAudioPlayer {
         }
     }
 
-    // 检查格式是否支持
+    /**
+     * 检查音频格式是否支持
+     * @param format 音频格式
+     * @return 是否支持该格式
+     */
     private boolean isFormatSupported(AudioFormat format) {
         DataLine.Info info = new DataLine.Info(SourceDataLine.class, format);
         return AudioSystem.isLineSupported(info);

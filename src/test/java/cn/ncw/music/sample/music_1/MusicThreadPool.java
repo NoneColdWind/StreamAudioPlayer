@@ -7,16 +7,16 @@ public class MusicThreadPool {
     public static void start() {
         try {
             TimeUnit.MILLISECONDS.sleep(5000);
-        } catch (Exception ignored) {
-
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
-        CountDownLatch countDownLatch = new CountDownLatch(3);
+        CountDownLatch countDownLatch = new CountDownLatch(2);
         ExecutorService musicThreadPool = new ThreadPoolExecutor(2, 2, 200, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<>(100));
         musicThreadPool.submit(()->{
             try {
                 FirstChannel.init();
-            } catch (InterruptedException ignored) {
-
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
             } finally {
                 countDownLatch.countDown();
             }
@@ -24,16 +24,16 @@ public class MusicThreadPool {
         musicThreadPool.submit(()->{
             try {
                 SecondChannel.init();
-            } catch (InterruptedException ignored) {
-
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
             } finally {
                 countDownLatch.countDown();
             }
         });
         try {
             countDownLatch.await();
-        } catch (InterruptedException ignored) {
-
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
         //关闭线程池
         musicThreadPool.shutdown();

@@ -1,5 +1,6 @@
 package cn.ncw.music.midi;
 
+import cn.ncw.music.midi.enums.MidiInstrument;
 import javax.sound.midi.MidiChannel;
 import javax.sound.midi.MidiSystem;
 import javax.sound.midi.MidiUnavailableException;
@@ -10,15 +11,15 @@ public class MidiPlayer {
     private static Synthesizer synth;
     private static MidiChannel[] channels;
 
-    // 常用音色常量
-    public static final int PIANO = 0;
-    public static final int MARIMBA = 12;
-    public static final int ORGAN = 16;
-    public static final int GUITAR = 25;
-    public static final int BASS = 33;
-    public static final int VIOLIN = 40;
-    public static final int TRUMPET = 56;
-    public static final int FLUTE = 73;
+    // 常用音色枚举
+    public static final MidiInstrument PIANO = MidiInstrument.ACOUSTIC_GRAND_PIANO;
+    public static final MidiInstrument MARIMBA = MidiInstrument.MARIMBA;
+    public static final MidiInstrument ORGAN = MidiInstrument.HAMMOND_ORGAN;
+    public static final MidiInstrument GUITAR = MidiInstrument.ACOUSTIC_GUITAR_STEEL;
+    public static final MidiInstrument BASS = MidiInstrument.ELECTRIC_BASS_FINGER;
+    public static final MidiInstrument VIOLIN = MidiInstrument.VIOLIN;
+    public static final MidiInstrument TRUMPET = MidiInstrument.TRUMPET;
+    public static final MidiInstrument FLUTE = MidiInstrument.FLUTE;
 
     // 初始化MIDI合成器
     static {
@@ -34,6 +35,7 @@ public class MidiPlayer {
     /**
      * 播放和弦
      * @param notes 音符数组（MIDI编号）
+     * @param velocity 音量(0-127)
      * @param duration 持续时间（毫秒）
      * @param instrument 音色编号（0-127）
      */
@@ -44,6 +46,7 @@ public class MidiPlayer {
     /**
      * 播放和弦（指定通道）
      * @param notes 音符数组
+     * @param velocity 音量(0-127)
      * @param duration 持续时间
      * @param instrument 音色编号
      * @param channel 通道编号（0-15）
@@ -57,7 +60,7 @@ public class MidiPlayer {
 
             // 同时播放所有音符（形成和弦）
             for (int note : notes) {
-                channels[channel].noteOn(note, velocity); // 音量80（0-127）
+                channels[channel].noteOn(note, velocity);
             }
 
             // 持续播放
@@ -73,25 +76,48 @@ public class MidiPlayer {
     }
 
     /**
+     * 播放和弦（使用枚举）
+     * @param notes 音符数组（MIDI编号）
+     * @param velocity 音量(0-127)
+     * @param duration 持续时间（毫秒）
+     * @param instrument 音色枚举
+     */
+    public static void playChord(int[] notes, int velocity, int duration, MidiInstrument instrument) {
+        playChord(notes, velocity, duration, instrument.getValue(), 0);
+    }
+
+    /**
+     * 播放和弦（使用枚举，指定通道）
+     * @param notes 音符数组
+     * @param velocity 音量(0-127)
+     * @param duration 持续时间
+     * @param instrument 音色枚举
+     * @param channel 通道编号（0-15）
+     */
+    public static void playChord(int[] notes, int velocity, int duration, MidiInstrument instrument, int channel) {
+        playChord(notes, velocity, duration, instrument.getValue(), channel);
+    }
+
+    /**
      * 播放单音
      * @param note MIDI音符编号
+     * @param velocity 音量(0-127)
      * @param duration 持续时间(毫秒)
      * @param instrument 音色编号
-     * @param velocity 音量(0-127)
      */
     public static void playNote(int note, int velocity, int duration, int instrument) {
-        playNote(note, duration, instrument, velocity, 0);
+        playNote(note, velocity, duration, instrument, 0);
     }
 
     /**
      * 播放单音(指定通道)
      * @param note MIDI音符编号
+     * @param velocity 音量(0-127)
      * @param duration 持续时间(毫秒)
      * @param instrument 音色编号
-     * @param velocity 音量(0-127)
      * @param channel 通道编号(0-15)
      */
-    public static void playNote(int note, int velocity, int duration, int instrument,  int channel) {
+    public static void playNote(int note, int velocity, int duration, int instrument, int channel) {
         try {
             channels[channel].programChange(instrument);
             channels[channel].noteOn(note, velocity);
@@ -100,6 +126,29 @@ public class MidiPlayer {
         } catch (Exception e) {
             e.printStackTrace();
         }
+    }
+
+    /**
+     * 播放单音（使用枚举）
+     * @param note MIDI音符编号
+     * @param velocity 音量(0-127)
+     * @param duration 持续时间(毫秒)
+     * @param instrument 音色枚举
+     */
+    public static void playNote(int note, int velocity, int duration, MidiInstrument instrument) {
+        playNote(note, velocity, duration, instrument.getValue(), 0);
+    }
+
+    /**
+     * 播放单音(使用枚举，指定通道)
+     * @param note MIDI音符编号
+     * @param velocity 音量(0-127)
+     * @param duration 持续时间(毫秒)
+     * @param instrument 音色枚举
+     * @param channel 通道编号(0-15)
+     */
+    public static void playNote(int note, int velocity, int duration, MidiInstrument instrument, int channel) {
+        playNote(note, velocity, duration, instrument.getValue(), channel);
     }
 
     /**
