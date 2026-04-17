@@ -19,6 +19,16 @@ repositories {
         dirs("libs")
     }
 
+    // 使用国内镜像源加速依赖下载
+    maven {
+        url = uri("https://maven.aliyun.com/repository/public")
+        isAllowInsecureProtocol = true
+    }
+    maven {
+        url = uri("https://maven.aliyun.com/repository/gradle-plugin")
+        isAllowInsecureProtocol = true
+    }
+
     mavenCentral()
 }
 
