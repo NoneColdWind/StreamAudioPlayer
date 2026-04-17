@@ -20,7 +20,7 @@ public class Converter {
 
         // 配置音频转换参数
         AudioAttributes audio = new AudioAttributes();
-         audio.setCodec(audioCodec); // 设置WAV的PCM编码，通常可省略，库会自动处理
+        audio.setCodec(audioCodec); // 设置WAV的PCM编码，通常可省略，库会自动处理
         //可以根据需要设置比特率、声道数、采样率等
         audio.setBitRate(bitRate);
         audio.setChannels(channels);
@@ -36,7 +36,7 @@ public class Converter {
         try {
             encoder.encode(new MultimediaObject(source), target, encodingAttributes);
         } catch (Exception e) {
-            e.printStackTrace();
+            throw new RuntimeException("音频转换失败: " + e.getMessage(), e);
         }
     }
 }

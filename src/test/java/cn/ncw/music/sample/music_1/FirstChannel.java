@@ -16,8 +16,8 @@ public class FirstChannel {
         try {
             TimeUnit.MILLISECONDS.sleep(83);
             playNote(68, 64, 2532, 0, 0);
-        } catch (Exception ignored) {
-
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
     private static void part_0_2() {
@@ -26,8 +26,8 @@ public class FirstChannel {
             playNote(72, 64, 78, 0, 0);
             TimeUnit.MILLISECONDS.sleep(6);
             playNote(73, 64, 2294, 0, 0);
-        } catch (Exception ignored) {
-
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -37,29 +37,29 @@ public class FirstChannel {
         threadPool.submit(()->{
             try {
                 part_0_0();
-            }finally {
+            } finally {
                 countDownLatch.countDown();
             }
         });
         threadPool.submit(()->{
             try {
                 part_0_1();
-            }finally {
+            } finally {
                 countDownLatch.countDown();
             }
         });
         threadPool.submit(()->{
             try {
                 part_0_2();
-            }finally {
+            } finally {
                 countDownLatch.countDown();
             }
         });
 
         try {
             countDownLatch.await();
-        } catch (InterruptedException ignored) {
-
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
         //关闭线程池
         threadPool.shutdown();
@@ -70,8 +70,8 @@ public class FirstChannel {
         try {
             playNote(63, 49, 632, 0, 0);
             TimeUnit.MILLISECONDS.sleep(8);
-        } catch (Exception ignored) {
-
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -80,8 +80,8 @@ public class FirstChannel {
             TimeUnit.MILLISECONDS.sleep(83);
             playNote(68, 49, 553, 0, 0);
             TimeUnit.MILLISECONDS.sleep(4);
-        } catch (Exception ignored) {
-
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -89,8 +89,8 @@ public class FirstChannel {
         try {
             TimeUnit.MILLISECONDS.sleep(166);
             playNote(75, 49, 474, 0, 0);
-        } catch (Exception ignored) {
-
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -100,29 +100,29 @@ public class FirstChannel {
         threadPool.submit(()->{
             try {
                 part_1_0();
-            }finally {
+            } finally {
                 countDownLatch.countDown();
             }
         });
         threadPool.submit(()->{
             try {
                 part_1_1();
-            }finally {
+            } finally {
                 countDownLatch.countDown();
             }
         });
         threadPool.submit(()->{
             try {
                 part_1_2();
-            }finally {
+            } finally {
                 countDownLatch.countDown();
             }
         });
 
         try {
             countDownLatch.await();
-        } catch (InterruptedException ignored) {
-
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
         //关闭线程池
         threadPool.shutdown();
@@ -133,8 +133,8 @@ public class FirstChannel {
         try {
             playNote(75, 49, 3165, 0, 0);
             TimeUnit.MILLISECONDS.sleep(9);
-        } catch (Exception ignored) {
-
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -143,8 +143,8 @@ public class FirstChannel {
             TimeUnit.MILLISECONDS.sleep(83);
             playNote(80, 49, 3086, 0, 0);
             TimeUnit.MILLISECONDS.sleep(5);
-        } catch (Exception ignored) {
-
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -152,8 +152,8 @@ public class FirstChannel {
         try {
             TimeUnit.MILLISECONDS.sleep(167);
             playNote(87, 49, 3007, 0, 0);
-        } catch (Exception ignored) {
-
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -163,29 +163,29 @@ public class FirstChannel {
         threadPool.submit(()->{
             try {
                 part_2_0();
-            }finally {
+            } finally {
                 countDownLatch.countDown();
             }
         });
         threadPool.submit(()->{
             try {
                 part_2_1();
-            }finally {
+            } finally {
                 countDownLatch.countDown();
             }
         });
         threadPool.submit(()->{
             try {
                 part_2_2();
-            }finally {
+            } finally {
                 countDownLatch.countDown();
             }
         });
 
         try {
             countDownLatch.await();
-        } catch (InterruptedException ignored) {
-
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
         //关闭线程池
         threadPool.shutdown();

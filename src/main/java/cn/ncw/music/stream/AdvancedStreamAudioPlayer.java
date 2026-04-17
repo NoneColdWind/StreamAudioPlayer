@@ -1,6 +1,11 @@
 package cn.ncw.music.stream;
 
 import cn.ncw.logger.log.NCWLoggerFactory;
+import cn.ncw.music.stream.enums.PlayMode;
+import cn.ncw.music.stream.enums.PlaybackState;
+import cn.ncw.music.stream.event.PlaybackEventListener;
+import cn.ncw.music.stream.event.PlaybackEventPublisher;
+import cn.ncw.music.stream.manager.PlaylistManager;
 import lombok.Getter;
 
 import javax.sound.sampled.*;
@@ -11,7 +16,6 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.Consumer;
 
 /**
  * 多功能流式媒体播放器 - 支持多种音频格式和高级功能
@@ -30,35 +34,7 @@ public class AdvancedStreamAudioPlayer {
 
     private final NCWLoggerFactory logger;
 
-    // 播放状态枚举
-    public enum PlaybackState {
-        PLAYING, PAUSED, STOPPED, BUFFERING, ERROR
-    }
 
-    // 播放模式枚举
-    @Getter
-    public enum PlayMode {
-        NORMAL("顺序播放"),
-        REPEAT_ONE("单曲循环"),
-        REPEAT_ALL("顺序循环"),
-        SHUFFLE("随机播放");
-
-        private final String description;
-
-        PlayMode(String description) {
-            this.description = description;
-        }
-
-    }
-
-    private PlayMode getPlayModeFromString(String playModeString) {
-        return switch (playModeString) {
-            case "REPEAT_ONE" -> PlayMode.REPEAT_ONE;
-            case "REPEAT_ALL" -> PlayMode.REPEAT_ALL;
-            case "SHUFFLE" -> PlayMode.SHUFFLE;
-            default -> PlayMode.NORMAL;
-        };
-    }
 
     // 支持的文件格式
     private static final Set<String> SUPPORTED_FORMATS = Set.of(
@@ -151,284 +127,6 @@ public class AdvancedStreamAudioPlayer {
     }
 
     /**
-     * 播放列表管理器 - 职责分离
-     */
-    private class PlaylistManager {
-        private final List<File> playlist = new CopyOnWriteArrayList<>();
-        private final AtomicInteger currentIndex = new AtomicInteger(0);
-        @Getter
-        private volatile PlayMode playMode = PlayMode.NORMAL;
-        private List<Integer> shuffleIndices = Collections.emptyList();
-        private final AtomicBoolean shuffleGenerated = new AtomicBoolean(false);
-        private final Object shuffleLock = new Object();
-
-        public List<File> getPlaylist() {
-            return new ArrayList<>(playlist);
-        }
-
-        public int getCurrentIndex() {
-            return currentIndex.get();
-        }
-
-        public File getCurrentFile() {
-            int index = currentIndex.get();
-            if (index >= 0 && index < playlist.size()) {
-                return playlist.get(index);
-            }
-            return null;
-        }
-
-        public void setCurrentIndex(int index) {
-            if (index >= 0 && index < playlist.size()) {
-                currentIndex.set(index);
-            }
-        }
-
-        public void setPlayMode(PlayMode mode) {
-            this.playMode = mode;
-            if (mode == PlayMode.SHUFFLE) {
-                generateShuffleList();
-            }
-        }
-
-        public boolean addToPlaylist(File file) {
-            if (!isFormatSupported(file)) {
-                return false;
-            }
-            playlist.add(file);
-            if (playMode == PlayMode.SHUFFLE) {
-                generateShuffleList();
-            }
-            return true;
-        }
-
-        public boolean addToPlaylist(Collection<File> files) {
-            List<File> supportedFiles = files.stream()
-                    .filter(AdvancedStreamAudioPlayer.this::isFormatSupported)
-                    .toList();
-            boolean changed = playlist.addAll(supportedFiles);
-            if (changed && playMode == PlayMode.SHUFFLE) {
-                generateShuffleList();
-            }
-            return changed;
-        }
-
-        public boolean removeFromPlaylist(int index) {
-            if (index < 0 || index >= playlist.size()) {
-                return false;
-            }
-            playlist.remove(index);
-
-            // 调整当前索引
-            int current = currentIndex.get();
-            if (current == index) {
-                currentIndex.set(-1);
-            } else if (current > index) {
-                currentIndex.decrementAndGet();
-            }
-
-            if (playMode == PlayMode.SHUFFLE) {
-                generateShuffleList();
-            }
-            return true;
-        }
-
-        public void clearPlaylist() {
-            playlist.clear();
-            currentIndex.set(-1);
-            shuffleIndices = Collections.emptyList();
-            shuffleGenerated.set(false);
-        }
-
-        public int getNextIndex() {
-            if (playlist.isEmpty()) {
-                return -1;
-            }
-
-            switch (playMode) {
-                case REPEAT_ONE:
-                    return currentIndex.get();
-
-                case REPEAT_ALL:
-                    return (currentIndex.get() + 1) % playlist.size();
-
-                case SHUFFLE:
-                    if (!shuffleGenerated.get()) {
-                        generateShuffleList();
-                    }
-                    if (shuffleIndices.isEmpty()) {
-                        return -1;
-                    }
-                    int currentIdx = findCurrentShuffleIndex();
-                    int nextShuffleIdx = (currentIdx + 1) % shuffleIndices.size();
-                    return shuffleIndices.get(nextShuffleIdx);
-                case NORMAL:
-                default:
-                    int normalNext = currentIndex.get() + 1;
-                    return normalNext < playlist.size() ? normalNext : -1;
-            }
-        }
-
-        public int getPreviousIndex() {
-            if (playlist.isEmpty()) {
-                return -1;
-            }
-
-            switch (playMode) {
-                case REPEAT_ONE:
-                    return currentIndex.get();
-
-                case REPEAT_ALL:
-                    return (currentIndex.get() - 1 + playlist.size()) % playlist.size();
-
-                case SHUFFLE:
-                    if (!shuffleGenerated.get()) {
-                        generateShuffleList();
-                    }
-                    if (shuffleIndices.isEmpty()) {
-                        return -1;
-                    }
-                    int currentIdx = findCurrentShuffleIndex();
-                    int prevShuffleIdx = (currentIdx - 1 + shuffleIndices.size()) % shuffleIndices.size();
-                    return shuffleIndices.get(prevShuffleIdx);
-
-                case NORMAL:
-                default:
-                    int normalPrev = currentIndex.get() - 1;
-                    return Math.max(0, normalPrev);
-            }
-        }
-
-        public int size() {
-            return playlist.size();
-        }
-
-        public boolean isEmpty() {
-            return playlist.isEmpty();
-        }
-
-        private void generateShuffleList() {
-            synchronized (shuffleLock) {
-                shuffleIndices = new ArrayList<>(playlist.size());
-                for (int i = 0; i < playlist.size(); i++) {
-                    shuffleIndices.add(i);
-                }
-                Collections.shuffle(shuffleIndices);
-                shuffleGenerated.set(true);
-            }
-        }
-
-        private int findCurrentShuffleIndex() {
-            int current = currentIndex.get();
-            synchronized (shuffleLock) {
-                for (int i = 0; i < shuffleIndices.size(); i++) {
-                    if (shuffleIndices.get(i) == current) {
-                        return i;
-                    }
-                }
-            }
-            return 0;
-        }
-    }
-
-    /**
-     * 事件发布器 - 职责分离
-     */
-    private class PlaybackEventPublisher {
-        private final List<PlaybackEventListener> listeners = new CopyOnWriteArrayList<>();
-        private final ExecutorService executor;
-
-        public PlaybackEventPublisher(ExecutorService executor) {
-            this.executor = executor;
-        }
-
-        public void addListener(PlaybackEventListener listener) {
-            listeners.add(listener);
-        }
-
-        public void removeListener(PlaybackEventListener listener) {
-            listeners.remove(listener);
-        }
-
-        public void removeAllListeners() {
-            listeners.clear();
-        }
-
-        public void firePlaybackStarted(File file) {
-            fireEvent(listener -> listener.onPlaybackStarted(file), "onPlaybackStarted");
-        }
-
-        public void firePlaybackPaused() {
-            fireEvent(PlaybackEventListener::onPlaybackPaused, "onPlaybackPaused");
-        }
-
-        public void firePlaybackResumed() {
-            fireEvent(PlaybackEventListener::onPlaybackResumed, "onPlaybackResumed");
-        }
-
-        public void firePlaybackStopped() {
-            fireEvent(PlaybackEventListener::onPlaybackStopped, "onPlaybackStopped");
-        }
-
-        public void firePlaybackFinished() {
-            fireEvent(PlaybackEventListener::onPlaybackFinished, "onPlaybackFinished");
-        }
-
-        public void fireTrackChanged(File previous, File next) {
-            fireEvent(listener -> listener.onTrackChanged(previous, next), "onTrackChanged");
-        }
-
-        public void fireError(Exception e) {
-            fireEvent(listener -> listener.onError(e), "onError");
-        }
-
-        public void firePositionChanged(double position) {
-            fireEvent(listener -> listener.onPositionChanged(position), "onPositionChanged");
-        }
-
-        public void fireVolumeChanged(double volume) {
-            fireEvent(listener -> listener.onVolumeChanged(volume), "onVolumeChanged");
-        }
-
-        public void firePlayModeChanged(PlayMode newMode) {
-            fireEvent(listener -> listener.onPlayModeChanged(newMode), "onPlayModeChanged");
-        }
-
-        public void firePlaylistUpdated() {
-            fireEvent(PlaybackEventListener::onPlaylistUpdated, "onPlaylistUpdated");
-        }
-
-        private void fireEvent(Consumer<PlaybackEventListener> action, String eventName) {
-            executor.submit(() -> {
-                for (PlaybackEventListener listener : listeners) {
-                    try {
-                        action.accept(listener);
-                    } catch (Exception e) {
-                        logger.error("Error in listener during " + eventName + " event", "fireEvent", e);
-                    }
-                }
-            });
-        }
-    }
-
-    /**
-     * 事件监听器接口
-     */
-    public interface PlaybackEventListener {
-        void onPlaybackStarted(File file);
-        void onPlaybackPaused();
-        void onPlaybackResumed();
-        void onPlaybackStopped();
-        void onPlaybackFinished();
-        void onTrackChanged(File previous, File next);
-        void onError(Exception e);
-        void onPositionChanged(double position);
-        void onVolumeChanged(double volume);
-        void onPlayModeChanged(PlayMode newMode);
-        void onPlaylistUpdated();
-    }
-
-    /**
      * 默认构造函数
      */
     public AdvancedStreamAudioPlayer(NCWLoggerFactory loggerFactory) {
@@ -442,8 +140,7 @@ public class AdvancedStreamAudioPlayer {
         this.logger = loggerFactory;
         this.bufferSize = bufferSize > 0 ? bufferSize : DEFAULT_BUFFER_SIZE;
         this.audioBuffer = new byte[this.bufferSize];
-        this.playlistManager = new PlaylistManager();
-
+        
         // 初始化线程池
         this.executorService = Executors.newCachedThreadPool(r -> {
             Thread thread = new Thread(r);
@@ -454,22 +151,26 @@ public class AdvancedStreamAudioPlayer {
             return thread;
         });
 
-        this.eventPublisher = new PlaybackEventPublisher(executorService);
+        // 初始化播放列表管理器
+        this.playlistManager = new PlaylistManager(this::isFormatSupported);
+        
+        // 初始化事件发布器
+        this.eventPublisher = new PlaybackEventPublisher(executorService, loggerFactory);
     }
 
     public void play(int index) throws UnsupportedAudioFileException,
             LineUnavailableException, IOException, InterruptedException {
-        play(playlistManager.playlist.get(index));
+        play(playlistManager.getPlaylist().get(index));
     }
 
     public void playFirst() throws UnsupportedAudioFileException,
             LineUnavailableException, IOException, InterruptedException {
-        play(playlistManager.playlist.getFirst());
+        play(playlistManager.getPlaylist().getFirst());
     }
 
     public void playLast() throws UnsupportedAudioFileException,
             LineUnavailableException, IOException, InterruptedException {
-        play(playlistManager.playlist.getLast());
+        play(playlistManager.getPlaylist().getLast());
     }
 
     /**
@@ -943,7 +644,7 @@ public class AdvancedStreamAudioPlayer {
     }
 
     public void setPlayMode(String mode) {
-        setPlayMode(getPlayModeFromString(mode));
+        setPlayMode(PlayMode.fromString(mode));
     }
 
     public void setPlayMode(PlayMode mode) {
@@ -1190,7 +891,7 @@ public class AdvancedStreamAudioPlayer {
     private boolean isFormatSupported(AudioFormat format) {
         if (format == null) return true;
         DataLine.Info info = new DataLine.Info(SourceDataLine.class, format);
-        return !AudioSystem.isLineSupported(info);
+        return AudioSystem.isLineSupported(info);
     }
 
     private String getFileExtension(File file) {
@@ -1363,187 +1064,5 @@ public class AdvancedStreamAudioPlayer {
 
     // ==================== 测试主方法 ====================
 
-    /**
-     * 测试主方法
-     */
-    static void main() {
-        AdvancedStreamAudioPlayer player = null;
-        NCWLoggerFactory loggerFactory = new NCWLoggerFactory("Test");
-        try {
-            player = new AdvancedStreamAudioPlayer(loggerFactory);
 
-            // 添加事件监听器
-            AdvancedStreamAudioPlayer finalPlayer = player;
-            player.addPlaybackEventListener(new PlaybackEventListener() {
-                @Override
-                public void onPlaybackStarted(File file) {
-                    System.out.println("开始播放: " + file.getName());
-                }
-
-                @Override
-                public void onPlaybackPaused() {
-                    System.out.println("播放暂停");
-                }
-
-                @Override
-                public void onPlaybackResumed() {
-                    System.out.println("播放继续");
-                }
-
-                @Override
-                public void onPlaybackStopped() {
-                    System.out.println("播放停止");
-                }
-
-                @Override
-                public void onPlaybackFinished() {
-                    System.out.println("播放完成");
-                }
-
-                @Override
-                public void onTrackChanged(File previous, File next) {
-                    System.out.println("切换曲目: " +
-                            (previous != null ? previous.getName() : "无") +
-                            " -> " + next.getName());
-                }
-
-                @Override
-                public void onError(Exception e) {
-                    System.err.println("播放错误: " + e.getMessage());
-                    e.printStackTrace();
-                }
-
-                @Override
-                public void onPositionChanged(double position) {
-                    System.out.printf("播放进度: %.1f%%\n", position * 100);
-                }
-
-                @Override
-                public void onVolumeChanged(double volume) {
-                    System.out.printf("音量改变: %.0f%%\n", volume * 100);
-                }
-
-                @Override
-                public void onPlayModeChanged(PlayMode newMode) {
-                    System.out.println("播放模式改变: " + newMode.getDescription());
-                }
-
-                @Override
-                public void onPlaylistUpdated() {
-                    System.out.println("播放列表已更新，当前大小: " + finalPlayer.getPlaylist().size());
-                }
-            });
-
-            // 创建测试文件列表
-            List<File> testFiles = new ArrayList<>();
-            for (int i = 1; i <= 6; i++) {
-                File file = new File("test" + i + ".wav");
-                if (file.exists()) {
-                    testFiles.add(file);
-                } else {
-                    System.out.println("测试文件不存在: " + file.getAbsolutePath());
-                }
-            }
-
-            if (testFiles.isEmpty()) {
-                System.out.println("请创建test1.wav到test3.wav测试文件");
-                return;
-            }
-
-            // 添加到播放列表
-            System.out.println("添加测试文件到播放列表...");
-            player.addToPlaylist(testFiles);
-
-            /*
-            // 测试顺序播放
-            System.out.println("\n=== 测试顺序播放 ===");
-            player.setPlayMode(PlayMode.NORMAL);
-            player.play(testFiles.getFirst().getAbsolutePath());
-
-            // 等待2秒
-            Thread.sleep(2000);
-
-            // 测试暂停/恢复
-            System.out.println("\n=== 测试暂停/恢复 ===");
-            player.pause();
-            Thread.sleep(1000);
-            player.resume();
-            Thread.sleep(1000);
-
-            // 测试音量控制
-            System.out.println("\n=== 测试音量控制 ===");
-            player.setVolume(0.5);
-            Thread.sleep(500);
-            player.increaseVolume(0.2);
-            Thread.sleep(500);
-            player.decreaseVolume(0.3);
-            Thread.sleep(1000);
-
-            // 测试跳转
-            System.out.println("\n=== 测试跳转功能 ===");
-            boolean seekResult = player.seekToTime(5.0);
-            System.out.println("跳转结果: " + seekResult);
-            Thread.sleep(2000);
-
-            // 停止播放
-            player.stop();
-
-            // 测试单曲循环
-            System.out.println("\n=== 测试单曲循环 ===");
-            player.setPlayMode(PlayMode.REPEAT_ONE);
-            player.play(testFiles.get(1).getAbsolutePath());
-            Thread.sleep(3000);
-            player.stop();
-
-            // 测试顺序循环
-            System.out.println("\n=== 测试顺序循环 ===");
-            player.setPlayMode(PlayMode.REPEAT_ALL);
-            player.play(testFiles.getFirst().getAbsolutePath());
-            Thread.sleep(2000);
-            player.stop();
-
-             */
-
-
-            player.setPlayMode(PlayMode.REPEAT_ALL);
-            player.play(0);
-
-            Thread.sleep(1000);
-
-            player.nextTrack();
-
-            IO.println(player.getAudioMetadata());
-
-            Thread.sleep(1000);
-
-            player.nextTrack();
-
-            IO.println(player.getAudioMetadata());
-
-            Thread.sleep(100000);
-
-            // 显示统计信息
-            System.out.println("\n=== 播放统计 ===");
-            Map<String, Object> stats = player.getPlaybackStatistics();
-            stats.forEach((k, v) -> System.out.println(k + ": " + v));
-
-            // 显示音频元数据
-            System.out.println("\n=== 音频元数据 ===");
-            Map<String, Object> metadata = player.getAudioMetadata();
-            metadata.forEach((k, v) -> System.out.println(k + ": " + v));
-
-            // 测试支持的音频格式
-            System.out.println("\n=== 支持的音频格式 ===");
-            Set<String> supportedFormats = AdvancedStreamAudioPlayer.getSupportedFormats();
-            System.out.println("支持的格式: " + String.join(", ", supportedFormats));
-
-        } catch (Exception e) {
-            e.printStackTrace();
-        } finally {
-            if (player != null) {
-                player.shutdown();
-                System.out.println("播放器已关闭");
-            }
-        }
-    }
 }
